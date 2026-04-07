@@ -1,0 +1,2 @@
+-- Intentionally left blank for now.
+-- The MVP schema is created through versioned migrations in supabase/migrations.

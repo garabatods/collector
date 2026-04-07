@@ -1,0 +1,211 @@
+# Collector App — Feature Research
+**Date:** March 2026 | **Project:** Collector App (Toys, Board Games, Comics & More)
+
+---
+
+## Executive Summary
+
+This document synthesizes research on what makes a great collector tracking app, drawing from competitor analysis of leading apps (CLZ, iCollect Everything, BoardGameGeek, Toyzie AI, ToySnap, Collectibles.com) and user feedback. The goal is to inform the Collector App's feature roadmap for toys, board games, and future categories like comics.
+
+---
+
+## 1. Core Collection Management
+
+These are table-stakes features every collector app must have.
+
+**Item Entry & Cataloging**
+The fastest path to catalog growth is barcode scanning. Users expect to point their camera at a box or item and have the app auto-fill the name, series, year, publisher, cover art, and metadata from a database. Apps like CLZ Comics and iCollect Everything both rely on large curated databases to power this. Manual entry must also be supported as a fallback, especially for rare, vintage, or custom items not in any database.
+
+**Item States & Status Tracking**
+Collectors need to distinguish between what they own, what they want, what they've sold or traded, and what they've gifted. A clear set of item states is essential: Owned, Wishlisted, For Sale/Trade, Sold, and On Loan are the most common. Board game apps like Board Games Collection (BGG-synced) also add a "Played" state.
+
+**Condition & Grade Tracking**
+Condition matters enormously for value and insurance. The app should support standard grading scales relevant to the category — for example: Mint/Near Mint/Good/Fair/Poor for general items, CGC/CBCS numeric grading for comics (future), and custom grades for toys. Users should be able to attach condition notes and photos of defects.
+
+**Photos & Media**
+Each item should support multiple photos — cover art pulled from the database plus user-uploaded photos showing the actual condition, box, inserts, and special details. This is critical for insurance documentation.
+
+---
+
+## 2. Organization & Discovery
+
+**Filtering & Sorting**
+Users have hundreds or thousands of items. Robust filtering by category, series, year, condition, acquisition date, tag, and value is essential. Multiple sort options (alphabetical, value, date added, completion %) are expected.
+
+**Tags & Custom Fields**
+Not every collection fits a fixed schema. Users need free-form tags (e.g., "signed," "limited edition," "variant cover," "sealed") and at least a few custom fields per item to track niche details specific to their hobby.
+
+**Sets & Series Tracking**
+One of the most powerful features for collectors is the ability to see completeness progress. A "series view" that shows all known items in a set, highlights what you own vs. what's missing, and calculates a completion percentage is highly valued. For board games this means expansions; for toys it means waves in an action figure line; for comics it means issue runs or story arcs.
+
+**Search**
+Full-text search across the entire collection, including notes and custom fields, with fast results. Barcode lookup should also be available from the search screen to quickly check if an item is already in the collection before buying it.
+
+---
+
+## 3. Valuation & Financial Tracking
+
+This is one of the top differentiating features among existing apps.
+
+**Market Value Integration**
+Real-time or regularly updated market values sourced from marketplaces (eBay sold listings, TCGPlayer, CovrPrice for comics) give collectors a live sense of their collection's worth. CLZ charges an add-on for CovrPrice integration ($89.95/year) and this is considered a premium but highly requested feature.
+
+**Portfolio Value Dashboard**
+A summary view showing total collection value, value over time (chart), most valuable items, and how the collection has appreciated or depreciated. This doubles as documentation for insurance.
+
+**Purchase Price vs. Current Value**
+Let users record what they paid for each item. The app can then show profit/loss per item and across the full collection — a feature that serious collectors and flippers love.
+
+**Estimated Replacement Cost**
+For insurance purposes, users want an easy export showing item name, condition, and current replacement value.
+
+---
+
+## 4. Board Game–Specific Features
+
+Board games have unique needs beyond basic cataloging.
+
+**Play Logging**
+Users want to log each play session with date, players, winner, score, and play time. Board Game Stats is dedicated almost entirely to this and has a loyal user base because of it.
+
+**Play Statistics**
+After logging plays: most-played games, win rates per player, average session length, best scores, "H-index" (a game collector's equivalent of an academic citation index). These stats keep users engaged with the app daily, not just when adding items.
+
+**Player Profiles**
+Create profiles for household members and regular gaming group friends so play logs can be attributed to real people and win/loss stats tracked per player.
+
+**Expansion & Accessory Tracking**
+Board games often have many expansions, promo packs, and accessories. The app should model parent-child relationships between base games and expansions and track which expansions are owned.
+
+**BGG Sync**
+BoardGameGeek is the industry-standard database for board games. Syncing with BGG (import collection, ratings, and wishlist) is a feature many users demand. It avoids re-entering data and taps into BGG's vast metadata.
+
+**"Teach to Play" Notes**
+A personal notepad per game where users can jot down setup reminders, house rules, and teaching tips — useful when pulling out a game that hasn't been played in months.
+
+---
+
+## 5. Toy–Specific Features
+
+**AI Visual Recognition**
+Apps like Toyzie AI and ToySnap use AI to identify toys from photos — especially useful for older items without barcodes. Snap a photo of a vintage Hot Wheels car, a LEGO set, or an action figure, and get metadata and estimated value instantly. This is a major differentiator vs. barcode-only apps.
+
+**Variant & Color Tracking**
+Toy collectors (especially Hot Wheels, Funko Pop, and action figure collectors) obsess over variants — different paint decos, treasure hunts, short-run variants. The app needs to support variants as sub-items within a parent item, with their own condition, photos, and value.
+
+**Sealed vs. Open Tracking**
+Toys in-box (MIB/MOC/MISB) are worth significantly more than opened items. The app should allow tracking sealed status and reflect this in value estimates.
+
+**LEGO Set Tracking**
+LEGO collectors want to track complete sets, missing pieces, and whether a set is built, unbuilt, or partially assembled. Integration with Brickset or Rebrickable databases would be a strong differentiator.
+
+---
+
+## 6. Comics–Specific Features (Future Phase)
+
+**Issue-Level Tracking**
+Comics are cataloged at the individual issue level, not just the series. The app must handle large volumes (thousands of issues) gracefully.
+
+**Run Completion View**
+Show a grid or list of all issues in a run, color-coded by ownership status (owned, missing, on wishlist). Gaps in a run are immediately visible.
+
+**CGC/CBCS Graded Comics**
+Support for slabbed (graded) comics with grade number, grading company, certification number, and slab photos.
+
+**Cover Variants**
+Modern comics have many cover variants (A cover, B cover, incentive variants). The app should model these as separate collectible items.
+
+**CovrPrice / Key Collector Integration**
+Comic values fluctuate based on news (character appearing in a movie or show). Integration with a live pricing service like CovrPrice and a "key issues" database adds real-time context to each issue's value.
+
+---
+
+## 7. Wishlist & Acquisition Tools
+
+**Wishlist with Priority**
+A dedicated wishlist separated from the owned collection, with the ability to set priority levels and add notes like "looking for under $X" or "only if sealed."
+
+**Price Alert / Notifications**
+Notify the user when a wishlisted item's market value drops below a target price, or when a matching item appears on a connected marketplace (future integration).
+
+**Quick "Already Own This?" Check**
+From any screen, users should be able to quickly scan a barcode or search to confirm whether an item is already in their collection — critical when browsing at a store or convention.
+
+---
+
+## 8. Social & Community Features
+
+**Collection Sharing**
+Let users generate a public or shareable link to their collection (or a subset of it) to share with friends, buying/selling communities, or insurance providers. Privacy controls are essential — not everything should be public by default.
+
+**Trading & Sale Listings**
+A lightweight marketplace or integration with existing platforms (eBay, Facebook Marketplace, BGG marketplace) to list items from the collection for sale or trade.
+
+**Friend Collections**
+See what friends own and identify opportunities to borrow a game before buying or compare collections.
+
+---
+
+## 9. Export & Backup
+
+**Export to CSV / PDF**
+Users need to export their collection for insurance documentation, spreadsheet analysis, or migration to another app. CSV is the minimum; a formatted PDF report with photos and values is a premium differentiator.
+
+**Cloud Backup & Sync**
+Automatic cloud backup with multi-device sync (phone + tablet + web). Users fear losing their catalog. This must be reliable and clearly communicated.
+
+**Import from Competitors**
+Allow importing from BGG, CLZ, iCollect Everything, and CSV files. Lowering the barrier to switch is key to user acquisition.
+
+---
+
+## 10. UX & Accessibility
+
+**Offline Mode**
+Collectors browse at garage sales, flea markets, and conventions where connectivity is unreliable. Core features (search collection, scan barcode, add item) must work offline and sync when reconnected.
+
+**Fast Barcode Scanning**
+The scan-to-add flow should take under 5 seconds end-to-end, including database lookup and confirmation. Slow scanning is one of the top frustrations cited in user reviews.
+
+**Multiple View Layouts**
+Collectors like to browse their collection in different ways: grid (cover art heavy), list (dense, sortable), and shelf/3D view (visual, like a physical shelf). Supporting at least grid and list is expected.
+
+**Dark Mode**
+Standard expectation in modern apps, especially for users browsing late at night.
+
+---
+
+## 11. Competitive Landscape Summary
+
+| App | Strengths | Weaknesses |
+|-----|-----------|------------|
+| **CLZ Comics / CLZ Games** | Deep databases, barcode scan, CovrPrice integration, web + mobile | Paid subscription, no social features, siloed by category |
+| **iCollect Everything** | Covers many categories, barcode scan, AI Auto-Fill, free tier | UI dated, database gaps for niche items |
+| **BoardGameGeek (BG Stats)** | Best play logging, huge community | No toy/comic support, web-heavy UX |
+| **Toyzie AI / ToySnap** | AI visual ID, market values for toys | Toy-only, limited cataloging depth |
+| **Collectibles.com** | AI appraisal, broad category coverage | More appraisal tool than collection manager |
+| **hobbyDB** | Large toy database, community data | Less polished UX, niche audience |
+
+**The Opportunity:** No single app does toys + board games + comics well in one unified experience with play tracking, AI recognition, real-time valuation, and a clean modern UX. A cross-category collector app with deep per-category features is the gap in the market.
+
+---
+
+## 12. Recommended MVP Feature Set
+
+For a first release focused on toys and board games, the following core features would cover the primary collector needs while staying buildable:
+
+- Barcode scan to add items (with manual fallback)
+- Item states: Owned / Wishlisted / Sold
+- Condition tracking with photos
+- Series / set completion view
+- Basic portfolio value (manual price entry + optional market value)
+- Play logging for board games (date, players, winner)
+- Collection search and filtering
+- Export to CSV
+- Cloud sync and backup
+
+**Phase 2 additions:** AI visual recognition, live market values, BGG sync, social sharing, and comics support.
+
+---
+
+*Research compiled March 2026. Sources: CLZ.com, iCollectEverything.com, BGStatsApp.com, BoardGameGeek, Toyzie AI, ToySnap, AppStore reviews, Google Play reviews, hobbyDB.*
