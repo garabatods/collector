@@ -1,21 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import '../features/collection/data/models/barcode_lookup_result.dart';
-import '../features/collection/data/services/upcitemdb_barcode_lookup_service.dart';
+import '../features/collection/data/models/add_item_autofill_result.dart';
+import '../features/collection/data/models/collectible_identification_result.dart';
+import '../features/collection/data/repositories/collectible_identification_repository.dart';
+import '../features/collection/data/services/add_item_autofill_resolver.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_panel.dart';
+import 'ai_photo_identification_screen.dart';
 import 'manual_add_collectible_screen.dart';
 
-enum _LookupPhase {
-  idle,
-  loading,
-  found,
-  notFound,
-  failed,
-}
+enum _LookupPhase { idle, loading, found, notFound, failed }
 
 class ScannerFlowScreen extends StatefulWidget {
   const ScannerFlowScreen({super.key});
@@ -38,11 +35,12 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
       BarcodeFormat.itf14,
     ],
   );
-  final UpcItemDbBarcodeLookupService _barcodeLookupService =
-      UpcItemDbBarcodeLookupService();
+  final CollectibleIdentificationRepository _identificationRepository =
+      CollectibleIdentificationRepository();
+  final AddItemAutofillResolver _autofillResolver = AddItemAutofillResolver();
 
   String? _detectedBarcode;
-  BarcodeLookupResult? _lookupResult;
+  CollectibleIdentificationResult? _lookupResult;
   String? _lookupMessage;
   _LookupPhase _lookupPhase = _LookupPhase.idle;
   bool _isHandlingDetection = false;
@@ -62,10 +60,7 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
     final barcode = capture.barcodes
         .map((item) => item.rawValue?.trim())
         .whereType<String>()
-        .firstWhere(
-          (value) => value.isNotEmpty,
-          orElse: () => '',
-        );
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
 
     if (barcode.isEmpty) {
       return;
@@ -96,29 +91,34 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
 
   Future<void> _lookupBarcode(String barcode) async {
     try {
-      final lookupResult = await _barcodeLookupService.lookup(barcode);
+      final lookupResult = await _identificationRepository.identifyBarcode(
+        barcode,
+      );
       if (!mounted || _detectedBarcode != barcode) {
         return;
       }
 
       setState(() {
         _lookupResult = lookupResult;
-        _lookupPhase =
-            lookupResult == null ? _LookupPhase.notFound : _LookupPhase.found;
-        _lookupMessage = lookupResult == null
-            ? 'No catalog match found. You can still continue and add the details manually.'
-            : null;
+        _lookupPhase = lookupResult.hasCatalogMatch
+            ? _LookupPhase.found
+            : lookupResult.isNotFound
+            ? _LookupPhase.notFound
+            : _LookupPhase.failed;
+        _lookupMessage = lookupResult.hasCatalogMatch
+            ? null
+            : lookupResult.isNotFound
+            ? 'No barcode match yet. AI Photo ID works better for loose toys, comics, worn packages, and barcode-less pieces.'
+            : 'Barcode lookup is unavailable right now. You can still continue manually or use AI Photo ID.';
       });
-    } on BarcodeLookupException catch (error) {
-      if (!mounted || _detectedBarcode != barcode) {
-        return;
+    } on CollectibleIdentificationException catch (error) {
+      if (mounted && _detectedBarcode == barcode) {
+        setState(() {
+          _lookupResult = null;
+          _lookupPhase = _LookupPhase.failed;
+          _lookupMessage = error.message;
+        });
       }
-
-      setState(() {
-        _lookupResult = null;
-        _lookupPhase = _LookupPhase.failed;
-        _lookupMessage = error.message;
-      });
     } catch (_) {
       if (!mounted || _detectedBarcode != barcode) {
         return;
@@ -153,12 +153,51 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
       return;
     }
 
+    final autofillResult = await _resolveAutofillResult(_lookupResult);
+    if (!mounted) {
+      return;
+    }
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => ManualAddCollectibleScreen(
           scannedBarcode: barcode,
-          barcodeLookup: _lookupResult,
+          identificationResult: _lookupResult,
+          autofillResult: autofillResult,
         ),
+      ),
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (created == true) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+
+    await _resumeScanning();
+  }
+
+  Future<AddItemAutofillResult?> _resolveAutofillResult(
+    CollectibleIdentificationResult? identificationResult,
+  ) async {
+    if (identificationResult == null || !identificationResult.hasPrefillData) {
+      return null;
+    }
+
+    try {
+      return await _autofillResolver.resolve(identificationResult);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _openAiPhotoId() async {
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) =>
+            AiPhotoIdentificationScreen(seedBarcode: _detectedBarcode),
       ),
     );
 
@@ -195,6 +234,7 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
     final detectedBarcode = _detectedBarcode;
     final lookupResult = _lookupResult;
     final lookupMessage = _lookupMessage;
+    final showScannerPreview = detectedBarcode == null;
 
     return Scaffold(
       body: Stack(
@@ -205,10 +245,7 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                 gradient: RadialGradient(
                   center: Alignment.topCenter,
                   radius: 1.2,
-                  colors: [
-                    AppColors.featureGlow,
-                    AppColors.background,
-                  ],
+                  colors: [AppColors.featureGlow, AppColors.background],
                 ),
               ),
             ),
@@ -238,8 +275,9 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                   Expanded(
                     child: CollectorPanel(
                       padding: const EdgeInsets.all(AppSpacing.lg),
-                      backgroundColor:
-                          AppColors.surfaceContainer.withValues(alpha: 0.92),
+                      backgroundColor: AppColors.surfaceContainer.withValues(
+                        alpha: 0.92,
+                      ),
                       child: LayoutBuilder(
                         builder: (context, constraints) {
                           final compactPanel = constraints.maxHeight < 540;
@@ -253,27 +291,56 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  _ScannerPreviewCard(
-                                    controller: _controller,
-                                    onDetect: _handleDetect,
-                                    height: previewHeight,
+                                  AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 220),
+                                    switchInCurve: Curves.easeOutCubic,
+                                    switchOutCurve: Curves.easeInCubic,
+                                    child: showScannerPreview
+                                        ? Padding(
+                                            key: const ValueKey(
+                                              'scanner-preview',
+                                            ),
+                                            padding: const EdgeInsets.only(
+                                              bottom: AppSpacing.lg,
+                                            ),
+                                            child: _ScannerPreviewCard(
+                                              controller: _controller,
+                                              onDetect: _handleDetect,
+                                              height: previewHeight,
+                                            ),
+                                          )
+                                        : Padding(
+                                            key: const ValueKey(
+                                              'scanner-paused',
+                                            ),
+                                            padding: const EdgeInsets.only(
+                                              bottom: AppSpacing.lg,
+                                            ),
+                                            child: _ScannerPausedBanner(
+                                              isLoading:
+                                                  _lookupPhase ==
+                                                  _LookupPhase.loading,
+                                            ),
+                                          ),
                                   ),
-                                  const SizedBox(height: AppSpacing.lg),
                                   if (detectedBarcode == null)
                                     Text(
                                       'Scanning for UPC / EAN',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.titleMedium,
                                     )
                                   else
                                     Text(
                                       _lookupPhase == _LookupPhase.loading
                                           ? 'Looking up the barcode'
+                                          : lookupResult?.hasCatalogMatch ==
+                                                true
+                                          ? 'Catalog match found'
                                           : 'Barcode detected',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.titleMedium,
                                     ),
                                   const SizedBox(height: AppSpacing.sm),
                                   if (detectedBarcode == null)
@@ -290,30 +357,38 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                                     _DetectedBarcodeCard(
                                       barcode: detectedBarcode,
                                     ),
-                                    if (_lookupPhase == _LookupPhase.loading) ...[
+                                    if (_lookupPhase ==
+                                        _LookupPhase.loading) ...[
                                       const SizedBox(height: AppSpacing.md),
-                                      const LinearProgressIndicator(
-                                        minHeight: 3,
-                                        borderRadius: BorderRadius.all(
-                                          Radius.circular(999),
-                                        ),
-                                      ),
-                                    ] else if (lookupResult != null) ...[
+                                      const _LookupLoadingCard(),
+                                    ] else if (lookupResult?.hasCatalogMatch ==
+                                        true) ...[
                                       const SizedBox(height: AppSpacing.md),
-                                      _LookupPreviewCard(
-                                        result: lookupResult,
-                                      ),
-                                    ] else if (lookupMessage != null) ...[
-                                      const SizedBox(height: AppSpacing.md),
+                                      _LookupPreviewCard(result: lookupResult),
+                                      const SizedBox(height: AppSpacing.sm),
                                       Text(
-                                        lookupMessage,
+                                        'Review the match, then continue to confirm or refine the details.',
                                         style: Theme.of(context)
                                             .textTheme
                                             .bodyMedium
                                             ?.copyWith(
-                                              color:
-                                                  AppColors.onSurfaceVariant,
+                                              color: AppColors.onSurfaceVariant,
                                             ),
+                                      ),
+                                    ] else if (lookupMessage != null) ...[
+                                      const SizedBox(height: AppSpacing.md),
+                                      _LookupNoticeCard(
+                                        title:
+                                            _lookupPhase ==
+                                                _LookupPhase.notFound
+                                            ? 'Barcode match missed'
+                                            : 'Lookup unavailable',
+                                        description: lookupMessage,
+                                        icon:
+                                            _lookupPhase ==
+                                                _LookupPhase.notFound
+                                            ? Icons.auto_awesome_rounded
+                                            : Icons.cloud_off_rounded,
                                       ),
                                     ],
                                   ],
@@ -333,23 +408,43 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                                       ),
                                     )
                                   else
-                                    Row(
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
                                       children: [
-                                        Expanded(
-                                          child: CollectorButton(
+                                        if (lookupResult?.hasCatalogMatch ==
+                                            true) ...[
+                                          CollectorButton(
+                                            label: 'Add details',
+                                            onPressed: _continueToManualAdd,
+                                          ),
+                                          const SizedBox(height: AppSpacing.md),
+                                          CollectorButton(
                                             label: 'Scan again',
                                             onPressed: _resumeScanning,
                                             variant: CollectorButtonVariant
                                                 .secondary,
                                           ),
-                                        ),
-                                        const SizedBox(width: AppSpacing.md),
-                                        Expanded(
-                                          child: CollectorButton(
-                                            label: 'Add details',
-                                            onPressed: _continueToManualAdd,
+                                        ] else ...[
+                                          CollectorButton(
+                                            label: 'Try AI Photo ID',
+                                            onPressed: _openAiPhotoId,
                                           ),
-                                        ),
+                                          const SizedBox(height: AppSpacing.md),
+                                          CollectorButton(
+                                            label: 'Add details manually',
+                                            onPressed: _continueToManualAdd,
+                                            variant: CollectorButtonVariant
+                                                .secondary,
+                                          ),
+                                          const SizedBox(height: AppSpacing.sm),
+                                          CollectorButton(
+                                            label: 'Scan again',
+                                            onPressed: _resumeScanning,
+                                            variant:
+                                                CollectorButtonVariant.tertiary,
+                                          ),
+                                        ],
                                       ],
                                     ),
                                 ],
@@ -361,6 +456,58 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                     ),
                   ),
                 ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScannerPausedBanner extends StatelessWidget {
+  const _ScannerPausedBanner({required this.isLoading});
+
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              isLoading ? Icons.search_rounded : Icons.pause_circle_rounded,
+              color: AppColors.primary,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              isLoading
+                  ? 'Scanner paused while we look for a catalog match.'
+                  : 'Scanner paused. Review the result below or scan again.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.onSurfaceVariant,
               ),
             ),
           ),
@@ -401,7 +548,8 @@ class _ScannerPreviewCard extends StatelessWidget {
               onDetect: onDetect,
               errorBuilder: (context, error) {
                 return _ScannerErrorState(
-                  message: error.errorCode == MobileScannerErrorCode.permissionDenied
+                  message:
+                      error.errorCode == MobileScannerErrorCode.permissionDenied
                       ? 'Camera permission is required to scan barcodes.'
                       : 'Scanner unavailable right now. You can still add the item manually.',
                 );
@@ -439,10 +587,62 @@ class _ScannerPreviewCard extends StatelessWidget {
   }
 }
 
+class _LookupLoadingCard extends StatelessWidget {
+  const _LookupLoadingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.18),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Padding(
+              padding: EdgeInsets.all(12),
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Checking the catalog',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  'We found a barcode and are pulling the strongest match now.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ScannerErrorState extends StatelessWidget {
-  const _ScannerErrorState({
-    required this.message,
-  });
+  const _ScannerErrorState({required this.message});
 
   final String message;
 
@@ -466,8 +666,8 @@ class _ScannerErrorState extends StatelessWidget {
                 message,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
+                  color: AppColors.onSurfaceVariant,
+                ),
               ),
             ],
           ),
@@ -478,9 +678,7 @@ class _ScannerErrorState extends StatelessWidget {
 }
 
 class _DetectedBarcodeCard extends StatelessWidget {
-  const _DetectedBarcodeCard({
-    required this.barcode,
-  });
+  const _DetectedBarcodeCard({required this.barcode});
 
   final String barcode;
 
@@ -517,9 +715,9 @@ class _DetectedBarcodeCard extends StatelessWidget {
               children: [
                 Text(
                   'SCANNED CODE',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: AppColors.primary,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: AppColors.primary),
                 ),
                 const SizedBox(height: AppSpacing.xxs),
                 Text(
@@ -538,14 +736,17 @@ class _DetectedBarcodeCard extends StatelessWidget {
 }
 
 class _LookupPreviewCard extends StatelessWidget {
-  const _LookupPreviewCard({
-    required this.result,
-  });
+  const _LookupPreviewCard({required this.result});
 
-  final BarcodeLookupResult result;
+  final CollectibleIdentificationResult? result;
 
   @override
   Widget build(BuildContext context) {
+    final result = this.result;
+    if (result == null) {
+      return const SizedBox.shrink();
+    }
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpacing.md),
@@ -560,8 +761,8 @@ class _LookupPreviewCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 72,
-            height: 72,
+            width: 88,
+            height: 88,
             decoration: BoxDecoration(
               color: AppColors.surfaceContainerHigh,
               borderRadius: BorderRadius.circular(18),
@@ -581,15 +782,15 @@ class _LookupPreviewCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'CATALOG MATCH',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: AppColors.primary,
-                      ),
+                  result.sourceBadge.toUpperCase(),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: AppColors.primary),
                 ),
                 const SizedBox(height: AppSpacing.xxs),
                 Text(
                   result.title,
-                  maxLines: 2,
+                  maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
@@ -600,10 +801,74 @@ class _LookupPreviewCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: AppColors.onSurfaceVariant,
-                        ),
+                      color: AppColors.onSurfaceVariant,
+                    ),
                   ),
                 ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LookupNoticeCard extends StatelessWidget {
+  const _LookupNoticeCard({
+    required this.title,
+    required this.description,
+    required this.icon,
+  });
+
+  final String title;
+  final String description;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.18),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: AppColors.secondaryContainer.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: AppColors.secondary),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  description,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  'You can still continue and add the collectible manually.',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(color: AppColors.primary),
+                ),
               ],
             ),
           ),
@@ -619,10 +884,7 @@ class _LookupImageFallback extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Center(
-      child: Icon(
-        Icons.inventory_2_outlined,
-        color: AppColors.primary,
-      ),
+      child: Icon(Icons.inventory_2_outlined, color: AppColors.primary),
     );
   }
 }

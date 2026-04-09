@@ -84,6 +84,7 @@ class CollectorSearchField extends StatelessWidget {
     this.iconColor,
     this.hintColor,
     this.controller,
+    this.focusNode,
     this.onTap,
     this.onChanged,
     this.readOnly = true,
@@ -96,6 +97,7 @@ class CollectorSearchField extends StatelessWidget {
   final Color? iconColor;
   final Color? hintColor;
   final TextEditingController? controller;
+  final FocusNode? focusNode;
   final VoidCallback? onTap;
   final ValueChanged<String>? onChanged;
   final bool readOnly;
@@ -106,6 +108,7 @@ class CollectorSearchField extends StatelessWidget {
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
+      focusNode: focusNode,
       readOnly: readOnly,
       autofocus: autofocus,
       onTap: onTap,

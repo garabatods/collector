@@ -106,7 +106,6 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
       featuredItem: featuredItem,
       featuredPhotoUrl: featuredPhotoUrl,
       favoriteCategory: favoriteCategory,
-      hasTradeItems: collectibles.any((item) => item.openToTrade),
     );
   }
 
@@ -818,7 +817,6 @@ class _CollectorHighlightPanel extends StatelessWidget {
                     if (data.favoriteCategory != null)
                       CollectorChip(label: 'Top category: ${data.favoriteCategory}'),
                     if (featured.isFavorite) const CollectorChip(label: 'Favorited piece'),
-                    if (data.hasTradeItems) const CollectorChip(label: 'Trade items active'),
                   ],
                 ),
               ],
@@ -1746,7 +1744,6 @@ class _ProfileScreenData {
     required this.featuredItem,
     required this.featuredPhotoUrl,
     required this.favoriteCategory,
-    required this.hasTradeItems,
   });
 
   final ProfileModel? profile;
@@ -1760,7 +1757,6 @@ class _ProfileScreenData {
   final CollectibleModel? featuredItem;
   final String? featuredPhotoUrl;
   final String? favoriteCategory;
-  final bool hasTradeItems;
 
   String get displayName {
     final profileName = profile?.displayName?.trim();

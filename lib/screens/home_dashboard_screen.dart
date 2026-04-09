@@ -6,6 +6,7 @@ import '../theme/app_spacing.dart';
 import '../widgets/collector_bottom_bar.dart';
 import '../widgets/collector_chip.dart';
 import '../widgets/collector_panel.dart';
+import 'ai_photo_identification_screen.dart';
 import 'collection_home_screen.dart';
 import 'collection_library_screen.dart';
 import 'collection_profile_screen.dart';
@@ -36,6 +37,7 @@ enum _DashboardTab {
 class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   var _selectedTab = _DashboardTab.home;
   var _refreshSeed = 0;
+  var _librarySearchFocusRequest = 0;
 
   void _selectTab(_DashboardTab tab) {
     setState(() {
@@ -46,6 +48,13 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   void _refreshCollectionViews() {
     setState(() {
       _refreshSeed++;
+    });
+  }
+
+  void _openLibrarySearch() {
+    setState(() {
+      _selectedTab = _DashboardTab.library;
+      _librarySearchFocusRequest++;
     });
   }
 
@@ -61,6 +70,10 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
             Navigator.of(context).pop();
             _openScannerFlow();
           },
+          onIdentifyWithAi: () {
+            Navigator.of(context).pop();
+            _openAiPhotoIdFlow();
+          },
           onAddManually: () {
             Navigator.of(context).pop();
             _openManualAddFlow();
@@ -74,6 +87,19 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => const ScannerFlowScreen(),
+      ),
+    );
+
+    if (created == true) {
+      _refreshCollectionViews();
+      _selectTab(_DashboardTab.library);
+    }
+  }
+
+  Future<void> _openAiPhotoIdFlow() async {
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => const AiPhotoIdentificationScreen(),
       ),
     );
 
@@ -103,14 +129,18 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         refreshSeed: _refreshSeed,
         onAddFirstItem: _openManualAddFlow,
         onScanItem: _openScannerFlow,
+        onOpenSearch: _openLibrarySearch,
         onOpenProfile: () => _selectTab(_DashboardTab.profile),
       ),
       SafeArea(
+        bottom: false,
         child: CollectionLibraryScreen(
           refreshSeed: _refreshSeed,
+          searchFocusRequest: _librarySearchFocusRequest,
         ),
       ),
       const SafeArea(
+        bottom: false,
         child: _TabPlaceholder(
           icon: Icons.favorite_outline_rounded,
           title: 'Wishlist',
@@ -118,6 +148,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         ),
       ),
       SafeArea(
+        bottom: false,
         child: CollectionProfileScreen(
           refreshSeed: _refreshSeed,
           onProfileChanged: _refreshCollectionViews,
@@ -200,10 +231,12 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
 class _AddToCollectionSheet extends StatelessWidget {
   const _AddToCollectionSheet({
     required this.onScanBarcode,
+    required this.onIdentifyWithAi,
     required this.onAddManually,
   });
 
   final VoidCallback onScanBarcode;
+  final VoidCallback onIdentifyWithAi;
   final VoidCallback onAddManually;
 
   @override
@@ -260,6 +293,16 @@ class _AddToCollectionSheet extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.md),
               _AddEntryOptionTile(
+                icon: Icons.auto_awesome_rounded,
+                title: 'Identify with AI',
+                helperText:
+                    'best for comics, loose items, rare pieces, and barcode-less collectibles',
+                tone: AppColors.tertiary,
+                premium: true,
+                onTap: onIdentifyWithAi,
+              ),
+              const SizedBox(height: AppSpacing.md),
+              _AddEntryOptionTile(
                 icon: Icons.add_photo_alternate_outlined,
                 title: 'Add manually',
                 helperText:
@@ -282,6 +325,7 @@ class _AddEntryOptionTile extends StatelessWidget {
     required this.helperText,
     required this.tone,
     required this.onTap,
+    this.premium = false,
   });
 
   final IconData icon;
@@ -289,6 +333,7 @@ class _AddEntryOptionTile extends StatelessWidget {
   final String helperText;
   final Color tone;
   final VoidCallback onTap;
+  final bool premium;
 
   @override
   Widget build(BuildContext context) {
@@ -299,11 +344,31 @@ class _AddEntryOptionTile extends StatelessWidget {
         borderRadius: AppRadii.large,
         child: Ink(
           decoration: BoxDecoration(
-            color: AppColors.surfaceContainer,
+            gradient: premium
+                ? LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      AppColors.primary.withValues(alpha: 0.18),
+                      AppColors.surfaceContainer,
+                      AppColors.tertiary.withValues(alpha: 0.16),
+                    ],
+                  )
+                : null,
+            color: premium ? null : AppColors.surfaceContainer,
             borderRadius: AppRadii.large,
             border: Border.all(
-              color: tone.withValues(alpha: 0.22),
+              color: tone.withValues(alpha: premium ? 0.34 : 0.22),
             ),
+            boxShadow: premium
+                ? [
+                    BoxShadow(
+                      color: AppColors.primaryShadow.withValues(alpha: 0.42),
+                      blurRadius: 26,
+                      offset: const Offset(0, 12),
+                    ),
+                  ]
+                : null,
           ),
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.lg),
@@ -330,13 +395,17 @@ class _AddEntryOptionTile extends StatelessWidget {
                     children: [
                       Text(
                         title,
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              color: premium ? AppColors.white : null,
+                            ),
                       ),
                       const SizedBox(height: AppSpacing.xs),
                       Text(
                         helperText,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: AppColors.onSurfaceVariant,
+                              color: premium
+                                  ? AppColors.white.withValues(alpha: 0.82)
+                                  : AppColors.onSurfaceVariant,
                             ),
                       ),
                     ],

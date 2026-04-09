@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../features/collection/data/models/barcode_lookup_result.dart';
+import '../features/collection/data/models/add_item_autofill_result.dart';
 import '../features/collection/data/models/collectible_model.dart';
+import '../features/collection/data/models/collectible_identification_result.dart';
 import '../features/collection/data/models/tag_model.dart';
 import '../features/collection/data/repositories/collectible_photos_repository.dart';
+import '../features/collection/data/repositories/collection_vocabulary_repository.dart';
 import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../features/collection/data/repositories/tags_repository.dart';
 import '../theme/app_colors.dart';
@@ -20,6 +22,7 @@ const _formHeaderBottomSpacing = AppSpacing.xl;
 const _formSectionSpacing = 40.0;
 const _formPanelContentSpacing = AppSpacing.md;
 const _visibleSuggestionCount = 5;
+const _createValueSentinel = '__create_value__';
 
 class ManualAddCollectibleScreen extends StatefulWidget {
   const ManualAddCollectibleScreen({
@@ -27,7 +30,9 @@ class ManualAddCollectibleScreen extends StatefulWidget {
     this.collectible,
     this.existingPhotoUrl,
     this.scannedBarcode,
-    this.barcodeLookup,
+    this.identificationResult,
+    this.autofillResult,
+    this.initialImage,
     this.selectedTagIds,
     this.newTagNames,
   });
@@ -35,7 +40,9 @@ class ManualAddCollectibleScreen extends StatefulWidget {
   final CollectibleModel? collectible;
   final String? existingPhotoUrl;
   final String? scannedBarcode;
-  final BarcodeLookupResult? barcodeLookup;
+  final CollectibleIdentificationResult? identificationResult;
+  final AddItemAutofillResult? autofillResult;
+  final XFile? initialImage;
   final List<String>? selectedTagIds;
   final List<String>? newTagNames;
 
@@ -79,6 +86,12 @@ class _ManualAddCollectibleScreenState
   final _titleController = TextEditingController();
   final _customCategoryController = TextEditingController();
   final _customBrandController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _franchiseController = TextEditingController();
+  final _seriesController = TextEditingController();
+  final _characterController = TextEditingController();
+  final _releaseYearController = TextEditingController();
+  final _issueNumberController = TextEditingController();
   final _notesController = TextEditingController();
   final _repository = CollectiblesRepository();
   final _photosRepository = CollectiblePhotosRepository();
@@ -90,29 +103,31 @@ class _ManualAddCollectibleScreenState
   String? _selectedBrand;
   bool _useCustomCategory = false;
   bool _useCustomBrand = false;
-  bool _showMoreCategories = false;
-  bool _showMoreBrands = false;
-  bool _showMoreTags = false;
   bool _detailsExpanded = false;
+  bool _organizationExpanded = false;
   String? _selectedCondition;
   String? _selectedBoxStatus;
   int _quantity = 1;
+  bool _isFavorite = false;
+  bool _isGrail = false;
+  bool _isDuplicate = false;
   bool _isSaving = false;
   String? _titleError;
   String? _categoryError;
   List<String> _topBrands = const [];
   List<String> _moreBrands = const [];
   List<TagModel> _availableTags = const [];
-  List<TagModel> _topTags = const [];
-  List<TagModel> _moreTags = const [];
   final Set<String> _selectedTagIds = <String>{};
   final List<String> _newTagNames = <String>[];
+  late AddItemFormMode _formMode;
 
   bool get _isEditing => widget.collectible != null;
+  bool get _isComicMode => _formMode == AddItemFormMode.comic;
 
   @override
   void initState() {
     super.initState();
+    _formMode = _resolveInitialFormMode();
     _hydrateFromCollectible();
   }
 
@@ -121,11 +136,35 @@ class _ManualAddCollectibleScreenState
     _titleController.dispose();
     _customCategoryController.dispose();
     _customBrandController.dispose();
+    _descriptionController.dispose();
+    _franchiseController.dispose();
+    _seriesController.dispose();
+    _characterController.dispose();
+    _releaseYearController.dispose();
+    _issueNumberController.dispose();
     _notesController.dispose();
     super.dispose();
   }
 
+  AddItemFormMode _resolveInitialFormMode() {
+    final collectible = widget.collectible;
+    if (collectible != null) {
+      final category = collectible.category.trim().toLowerCase();
+      if (category == 'comics' ||
+          (collectible.itemNumber ?? '').trim().isNotEmpty) {
+        return AddItemFormMode.comic;
+      }
+      return AddItemFormMode.general;
+    }
+
+    return widget.autofillResult?.formMode ??
+        (widget.identificationResult?.isComicLike ?? false
+            ? AddItemFormMode.comic
+            : AddItemFormMode.general);
+  }
+
   void _hydrateFromCollectible() {
+    _selectedImage = widget.initialImage;
     _selectedTagIds
       ..clear()
       ..addAll(widget.selectedTagIds ?? const []);
@@ -135,12 +174,20 @@ class _ManualAddCollectibleScreenState
 
     final collectible = widget.collectible;
     if (collectible == null) {
-      _hydrateFromBarcodeLookup();
+      _hydrateFromIdentification();
+      _applyAutofillResult();
       _loadSuggestions();
       return;
     }
 
     _titleController.text = collectible.title;
+    _descriptionController.text = collectible.description ?? '';
+    _franchiseController.text = collectible.franchise ?? '';
+    _seriesController.text =
+        collectible.series ?? collectible.lineOrSeries ?? '';
+    _characterController.text = collectible.characterOrSubject ?? '';
+    _releaseYearController.text = collectible.releaseYear?.toString() ?? '';
+    _issueNumberController.text = collectible.itemNumber ?? '';
     final collectibleBrand = (collectible.brand ?? '').trim();
     _selectedBrand = collectibleBrand.isEmpty ? null : collectibleBrand;
     _useCustomBrand = collectibleBrand.isNotEmpty;
@@ -157,6 +204,9 @@ class _ManualAddCollectibleScreenState
     _selectedCondition = collectible.itemCondition;
     _selectedBoxStatus = collectible.boxStatus;
     _quantity = collectible.quantity;
+    _isFavorite = collectible.isFavorite;
+    _isGrail = collectible.isGrail;
+    _isDuplicate = collectible.isDuplicate;
 
     if (_topCategories.contains(collectible.category)) {
       _selectedCategory = collectible.category;
@@ -164,26 +214,28 @@ class _ManualAddCollectibleScreenState
     } else if (_moreCategories.contains(collectible.category)) {
       _selectedCategory = collectible.category;
       _useCustomCategory = false;
-      _showMoreCategories = true;
     } else {
       _customCategoryController.text = collectible.category;
       _useCustomCategory = true;
     }
 
+    _detailsExpanded = _hasVisibleMetadata();
+    _organizationExpanded =
+        _selectedTagIds.isNotEmpty || _newTagNames.isNotEmpty;
     _loadSuggestions();
   }
 
-  void _hydrateFromBarcodeLookup() {
-    final barcodeLookup = widget.barcodeLookup;
-    if (barcodeLookup == null) {
+  void _hydrateFromIdentification() {
+    final identificationResult = widget.identificationResult;
+    if (identificationResult == null) {
       return;
     }
 
     if (_titleController.text.trim().isEmpty) {
-      _titleController.text = barcodeLookup.title;
+      _titleController.text = identificationResult.title;
     }
 
-    final suggestedCategory = barcodeLookup.suggestedCategory;
+    final suggestedCategory = identificationResult.suggestedCategory;
     if (suggestedCategory != null && suggestedCategory.isNotEmpty) {
       if (_topCategories.contains(suggestedCategory)) {
         _selectedCategory = suggestedCategory;
@@ -191,7 +243,6 @@ class _ManualAddCollectibleScreenState
       } else if (_moreCategories.contains(suggestedCategory)) {
         _selectedCategory = suggestedCategory;
         _useCustomCategory = false;
-        _showMoreCategories = true;
       } else {
         _customCategoryController.text = suggestedCategory;
         _useCustomCategory = true;
@@ -199,11 +250,61 @@ class _ManualAddCollectibleScreenState
     }
 
     if (((_selectedBrand ?? '').trim().isEmpty) &&
-        (barcodeLookup.brand ?? '').trim().isNotEmpty) {
-      _selectedBrand = barcodeLookup.brand!.trim();
+        (identificationResult.brand ?? '').trim().isNotEmpty) {
+      _selectedBrand = identificationResult.brand!.trim();
       _useCustomBrand = true;
       _customBrandController.clear();
     }
+
+    if (_descriptionController.text.trim().isEmpty) {
+      _descriptionController.text = identificationResult.description ?? '';
+    }
+    if (_franchiseController.text.trim().isEmpty) {
+      _franchiseController.text = identificationResult.franchise ?? '';
+    }
+    if (_seriesController.text.trim().isEmpty) {
+      _seriesController.text =
+          identificationResult.volumeCandidate ??
+          identificationResult.series ??
+          '';
+    }
+    if (_characterController.text.trim().isEmpty) {
+      _characterController.text = identificationResult.characterOrSubject ?? '';
+    }
+    if (_releaseYearController.text.trim().isEmpty &&
+        identificationResult.releaseYear != null) {
+      _releaseYearController.text = identificationResult.releaseYear.toString();
+    }
+    if (_issueNumberController.text.trim().isEmpty) {
+      _issueNumberController.text = identificationResult.issueNumber ?? '';
+    }
+  }
+
+  void _applyAutofillResult() {
+    final autofillResult = widget.autofillResult;
+    if (autofillResult == null) {
+      _detailsExpanded = _hasVisibleMetadata();
+      _organizationExpanded =
+          _selectedTagIds.isNotEmpty || _newTagNames.isNotEmpty;
+      return;
+    }
+
+    _formMode = autofillResult.formMode;
+    _setIfEmpty(_titleController, autofillResult.title);
+    _setIfEmpty(_descriptionController, autofillResult.description);
+    _setIfEmpty(_franchiseController, autofillResult.franchise);
+    _setIfEmpty(_seriesController, autofillResult.seriesOrVolume);
+    _setIfEmpty(_characterController, autofillResult.characterOrSubject);
+    _setIfEmpty(_releaseYearController, autofillResult.releaseYear?.toString());
+    _setIfEmpty(_issueNumberController, autofillResult.issueNumber);
+
+    _applyResolvedCategory(autofillResult.category);
+    _applyResolvedBrand(autofillResult.brandOrPublisher);
+    _applyTagSuggestions(autofillResult);
+
+    _detailsExpanded = _hasVisibleMetadata();
+    _organizationExpanded =
+        _selectedTagIds.isNotEmpty || _newTagNames.isNotEmpty;
   }
 
   Future<void> _loadSuggestions() async {
@@ -234,19 +335,21 @@ class _ManualAddCollectibleScreenState
           return byCount == 0 ? a.key.compareTo(b.key) : byCount;
         });
 
-      final brands =
-          sortedBrands.map((entry) => entry.key).toList(growable: false);
-      final topBrands = brands.take(_visibleSuggestionCount).toList(growable: false);
-      final moreBrands =
-          brands.skip(_visibleSuggestionCount).toList(growable: false);
+      final brands = sortedBrands
+          .map((entry) => entry.key)
+          .toList(growable: false);
+      final topBrands = brands
+          .take(_visibleSuggestionCount)
+          .toList(growable: false);
+      final moreBrands = brands
+          .skip(_visibleSuggestionCount)
+          .toList(growable: false);
       final pendingBrand = (_selectedBrand ?? '').trim();
 
       setState(() {
         _topBrands = topBrands;
         _moreBrands = moreBrands;
         _availableTags = tags;
-        _topTags = tags.take(_visibleSuggestionCount).toList(growable: false);
-        _moreTags = tags.skip(_visibleSuggestionCount).toList(growable: false);
 
         if (pendingBrand.isEmpty) {
           return;
@@ -255,9 +358,6 @@ class _ManualAddCollectibleScreenState
         if (brands.contains(pendingBrand)) {
           _selectedBrand = pendingBrand;
           _useCustomBrand = false;
-          if (moreBrands.contains(pendingBrand)) {
-            _showMoreBrands = true;
-          }
         } else {
           _selectedBrand = pendingBrand;
           _useCustomBrand = true;
@@ -272,8 +372,6 @@ class _ManualAddCollectibleScreenState
         _topBrands = const [];
         _moreBrands = const [];
         _availableTags = const [];
-        _topTags = const [];
-        _moreTags = const [];
       });
     }
   }
@@ -298,6 +396,7 @@ class _ManualAddCollectibleScreenState
     setState(() {
       _useCustomCategory = false;
       _selectedCategory = category;
+      _customCategoryController.clear();
       _categoryError = null;
     });
   }
@@ -334,11 +433,13 @@ class _ManualAddCollectibleScreenState
 
   Future<void> _openCustomBrandSheet() async {
     final value = await _showValueInputSheet(
-      title: 'Add brand',
-      description: 'Create a brand when the saved suggestions do not fit.',
-      fieldLabel: 'Brand name',
-      fieldHint: 'McFarlane Toys',
-      submitLabel: 'Save brand',
+      title: _isComicMode ? 'Add publisher' : 'Add brand',
+      description: _isComicMode
+          ? 'Create a publisher when the saved suggestions do not fit.'
+          : 'Create a brand when the saved suggestions do not fit.',
+      fieldLabel: _isComicMode ? 'Publisher name' : 'Brand name',
+      fieldHint: _isComicMode ? 'IDW Publishing' : 'McFarlane Toys',
+      submitLabel: _isComicMode ? 'Save publisher' : 'Save brand',
       initialValue: _useCustomBrand ? _customBrandController.text : '',
     );
 
@@ -357,27 +458,6 @@ class _ManualAddCollectibleScreenState
       _selectedBrand = existingBrand ?? value;
       _useCustomBrand = existingBrand == null;
       _customBrandController.text = existingBrand ?? value;
-      if (existingBrand != null && _moreBrands.contains(existingBrand)) {
-        _showMoreBrands = true;
-      }
-    });
-  }
-
-  void _toggleMoreCategories() {
-    setState(() {
-      _showMoreCategories = !_showMoreCategories;
-    });
-  }
-
-  void _toggleMoreBrands() {
-    setState(() {
-      _showMoreBrands = !_showMoreBrands;
-    });
-  }
-
-  void _toggleMoreTags() {
-    setState(() {
-      _showMoreTags = !_showMoreTags;
     });
   }
 
@@ -387,12 +467,24 @@ class _ManualAddCollectibleScreenState
     });
   }
 
-  void _toggleTagSelection(String tagId) {
+  void _toggleOrganizationExpanded() {
     setState(() {
-      if (_selectedTagIds.contains(tagId)) {
-        _selectedTagIds.remove(tagId);
-      } else {
-        _selectedTagIds.add(tagId);
+      _organizationExpanded = !_organizationExpanded;
+    });
+  }
+
+  void _toggleCollectorState(CollectorState collectorState) {
+    setState(() {
+      switch (collectorState) {
+        case CollectorState.favorite:
+          _isFavorite = !_isFavorite;
+          break;
+        case CollectorState.grail:
+          _isGrail = !_isGrail;
+          break;
+        case CollectorState.duplicate:
+          _isDuplicate = !_isDuplicate;
+          break;
       }
     });
   }
@@ -478,6 +570,87 @@ class _ManualAddCollectibleScreenState
     );
   }
 
+  Future<void> _openCategorySelectorSheet() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _OptionSearchBottomSheet(
+        title: 'Choose category',
+        description:
+            'Search categories instead of browsing a long wall of pills.',
+        searchHint: 'Search categories',
+        options: _categoryOptions,
+        selectedValue: _useCustomCategory ? null : _selectedCategory,
+        createActionLabel: 'Create category',
+      ),
+    );
+
+    if (!mounted || selected == null) {
+      return;
+    }
+
+    if (selected == _createValueSentinel) {
+      await _openCustomCategorySheet();
+      return;
+    }
+
+    _selectCategory(selected);
+  }
+
+  Future<void> _openBrandSelectorSheet() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _OptionSearchBottomSheet(
+        title: _brandSheetTitle,
+        description: _brandSheetDescription,
+        searchHint: _isComicMode ? 'Search publishers' : 'Search brands',
+        options: _brandOptions,
+        selectedValue: _useCustomBrand ? null : _selectedBrand,
+        createActionLabel: _isComicMode ? 'Create publisher' : 'Create brand',
+        emptyStateLabel: _brandEmptyLabel,
+      ),
+    );
+
+    if (!mounted || selected == null) {
+      return;
+    }
+
+    if (selected == _createValueSentinel) {
+      await _openCustomBrandSheet();
+      return;
+    }
+
+    _selectBrand(selected);
+  }
+
+  Future<void> _openSavedTagsPickerSheet() async {
+    final selectedIds = await showModalBottomSheet<Set<String>>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _TagSearchBottomSheet(
+        availableTags: _availableTags,
+        selectedTagIds: _selectedTagIds,
+      ),
+    );
+
+    if (!mounted || selectedIds == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedTagIds
+        ..clear()
+        ..addAll(selectedIds);
+    });
+  }
+
   void _adjustQuantity(int delta) {
     setState(() {
       _quantity = (_quantity + delta).clamp(1, 999);
@@ -485,6 +658,15 @@ class _ManualAddCollectibleScreenState
   }
 
   String _resolvedCategory() {
+    if (_isComicMode) {
+      final resolvedComicCategory = (_selectedCategory ?? '').trim();
+      if (resolvedComicCategory.isNotEmpty) {
+        return resolvedComicCategory;
+      }
+      final customComicCategory = _customCategoryController.text.trim();
+      return customComicCategory.isEmpty ? 'Comics' : customComicCategory;
+    }
+
     if (_useCustomCategory) {
       return _customCategoryController.text.trim();
     }
@@ -497,10 +679,165 @@ class _ManualAddCollectibleScreenState
     return selectedBrand.isEmpty ? null : selectedBrand;
   }
 
+  String _resolvedCategoryDisplayValue() {
+    final category = _resolvedCategory();
+    return category.isEmpty ? 'Choose a category' : category;
+  }
+
+  String _resolvedBrandDisplayValue() {
+    final brand = _resolvedBrand();
+    if ((brand ?? '').isEmpty) {
+      return _isComicMode ? 'Choose a publisher' : 'Optional for now';
+    }
+    return brand!;
+  }
+
+  List<String> get _categoryOptions => [
+    ...{
+      ..._topCategories,
+      ..._moreCategories,
+      if ((_selectedCategory ?? '').trim().isNotEmpty) _selectedCategory!,
+      if (_useCustomCategory &&
+          _customCategoryController.text.trim().isNotEmpty)
+        _customCategoryController.text.trim(),
+    },
+  ].toList(growable: false);
+
+  List<String> get _brandOptions => [
+    ...{
+      ..._topBrands,
+      ..._moreBrands,
+      if ((_selectedBrand ?? '').trim().isNotEmpty) _selectedBrand!,
+      if (_useCustomBrand && _customBrandController.text.trim().isNotEmpty)
+        _customBrandController.text.trim(),
+    },
+  ].toList(growable: false);
+
+  List<TagModel> get _selectedExistingTags => _availableTags
+      .where(
+        (tag) => (tag.id ?? '').isNotEmpty && _selectedTagIds.contains(tag.id),
+      )
+      .toList(growable: false);
+
   String? _nullableText(TextEditingController controller) {
     final value = controller.text.trim();
     return value.isEmpty ? null : value;
   }
+
+  int? _nullableInt(TextEditingController controller) {
+    final value = controller.text.trim();
+    if (value.isEmpty) {
+      return null;
+    }
+    return int.tryParse(value);
+  }
+
+  void _setIfEmpty(TextEditingController controller, String? value) {
+    if (controller.text.trim().isNotEmpty) {
+      return;
+    }
+    final trimmed = value?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return;
+    }
+    controller.text = trimmed;
+  }
+
+  void _applyResolvedCategory(ResolvedMatch<String>? resolvedMatch) {
+    final value = resolvedMatch?.resolvedValue?.trim();
+    if (value == null || value.isEmpty) {
+      return;
+    }
+
+    if (resolvedMatch!.hasExistingMatch) {
+      _selectedCategory = value;
+      _useCustomCategory = false;
+      _customCategoryController.clear();
+      return;
+    }
+
+    _selectedCategory = null;
+    _useCustomCategory = true;
+    _customCategoryController.text = value;
+  }
+
+  void _applyResolvedBrand(ResolvedMatch<String>? resolvedMatch) {
+    final value = resolvedMatch?.resolvedValue?.trim();
+    if (value == null || value.isEmpty) {
+      return;
+    }
+
+    _selectedBrand = value;
+    if (resolvedMatch!.hasExistingMatch) {
+      _useCustomBrand = false;
+      _customBrandController.clear();
+      return;
+    }
+
+    _useCustomBrand = true;
+    _customBrandController.text = value;
+  }
+
+  void _applyTagSuggestions(AddItemAutofillResult autofillResult) {
+    _selectedTagIds.addAll(autofillResult.matchedTagIds);
+    for (final tagName in autofillResult.newTagNames) {
+      final alreadySelectedExisting = _availableTags.any(
+        (tag) =>
+            tag.name.trim().toLowerCase() == tagName.toLowerCase() &&
+            _selectedTagIds.contains(tag.id),
+      );
+      final alreadyQueued = _newTagNames.any(
+        (existing) => existing.toLowerCase() == tagName.toLowerCase(),
+      );
+
+      if (!alreadySelectedExisting && !alreadyQueued) {
+        _newTagNames.add(tagName);
+      }
+    }
+  }
+
+  bool _hasVisibleMetadata() {
+    return _descriptionController.text.trim().isNotEmpty ||
+        _franchiseController.text.trim().isNotEmpty ||
+        _seriesController.text.trim().isNotEmpty ||
+        _characterController.text.trim().isNotEmpty ||
+        _releaseYearController.text.trim().isNotEmpty ||
+        _issueNumberController.text.trim().isNotEmpty ||
+        _selectedCondition != null ||
+        _selectedBoxStatus != null;
+  }
+
+  String get _screenTitle {
+    if (_isEditing) {
+      return _isComicMode ? 'Edit comic.' : 'Edit item.';
+    }
+    return _isComicMode ? 'Add a comic.' : 'Add an item.';
+  }
+
+  String get _screenDescription {
+    return _isComicMode
+        ? 'Comic details work a little differently, so we front-load the issue and publisher info.'
+        : 'Save the essentials first. Add more only if it helps.';
+  }
+
+  String get _brandFieldLabel => _isComicMode ? 'Publisher' : 'Brand';
+
+  String get _brandSheetTitle =>
+      _isComicMode ? 'Choose publisher' : 'Choose brand';
+
+  String get _brandSheetDescription => _isComicMode
+      ? 'Search the publishers already in your collection or add a new one.'
+      : 'Search the brands already in your collection or add a new one.';
+
+  String get _brandFieldHelperText => _isComicMode
+      ? 'Publisher helps organize comic runs'
+      : 'Optional for the first save';
+
+  String get _brandEmptyLabel =>
+      _isComicMode ? 'No saved publishers yet' : 'No saved brands yet';
+
+  String get _seriesFieldLabel =>
+      _isComicMode ? 'Series / Volume' : 'Line / Series';
 
   Future<void> _save() async {
     final title = _titleController.text.trim();
@@ -525,21 +862,29 @@ class _ManualAddCollectibleScreenState
         id: widget.collectible?.id,
         userId: widget.collectible?.userId,
         barcode:
-            (widget.scannedBarcode ?? widget.collectible?.barcode)?.trim(),
+            (widget.scannedBarcode ??
+                    widget.autofillResult?.barcode ??
+                    widget.collectible?.barcode)
+                ?.trim(),
         title: title,
         category: category,
+        description: _nullableText(_descriptionController),
         brand: _resolvedBrand(),
-        franchise: widget.collectible?.franchise,
-        lineOrSeries:
-            widget.collectible?.lineOrSeries ?? widget.collectible?.series,
-        characterOrSubject: widget.collectible?.characterOrSubject,
+        series: _nullableText(_seriesController),
+        franchise: _nullableText(_franchiseController),
+        lineOrSeries: _nullableText(_seriesController),
+        characterOrSubject: _nullableText(_characterController),
+        releaseYear: _nullableInt(_releaseYearController),
         itemCondition: _selectedCondition,
-        boxStatus: _selectedBoxStatus,
+        boxStatus: _isComicMode
+            ? (widget.collectible?.boxStatus ?? _selectedBoxStatus)
+            : _selectedBoxStatus,
+        itemNumber: _nullableText(_issueNumberController),
         quantity: _quantity,
-        isFavorite: widget.collectible?.isFavorite ?? false,
-        isGrail: widget.collectible?.isGrail ?? false,
-        isDuplicate: widget.collectible?.isDuplicate ?? false,
-        openToTrade: widget.collectible?.openToTrade ?? false,
+        isFavorite: _isFavorite,
+        isGrail: _isGrail,
+        isDuplicate: _isDuplicate,
+        openToTrade: false,
         notes: _nullableText(_notesController),
       );
 
@@ -581,11 +926,11 @@ class _ManualAddCollectibleScreenState
         }
       } else if (!_isEditing &&
           collectibleId != null &&
-          (widget.barcodeLookup?.imageUrl ?? '').isNotEmpty) {
+          (widget.identificationResult?.imageUrl ?? '').isNotEmpty) {
         try {
           await _photosRepository.uploadPrimaryPhotoFromRemoteImage(
             collectibleId: collectibleId,
-            imageUrl: widget.barcodeLookup!.imageUrl!,
+            imageUrl: widget.identificationResult!.imageUrl!,
             fallbackFileName: title.toLowerCase().replaceAll(' ', '-'),
             caption: title,
           );
@@ -598,6 +943,7 @@ class _ManualAddCollectibleScreenState
         return;
       }
 
+      CollectionVocabularyRepository.invalidateCache();
       Navigator.of(context).pop(true);
 
       messenger.showSnackBar(
@@ -605,15 +951,15 @@ class _ManualAddCollectibleScreenState
           content: Text(
             selectedImage == null
                 ? _isEditing
-                    ? 'Collectible updated.'
-                    : 'Collectible added.'
+                      ? 'Collectible updated.'
+                      : 'Collectible added.'
                 : photoUploadFailed
-                    ? _isEditing
-                        ? 'Collectible updated, but the photo could not be uploaded.'
-                        : 'Collectible added, but the photo could not be uploaded.'
-                    : _isEditing
-                        ? 'Collectible and photo updated.'
-                        : 'Collectible and photo added.',
+                ? _isEditing
+                      ? 'Collectible updated, but the photo could not be uploaded.'
+                      : 'Collectible added, but the photo could not be uploaded.'
+                : _isEditing
+                ? 'Collectible and photo updated.'
+                : 'Collectible and photo added.',
           ),
         ),
       );
@@ -651,10 +997,7 @@ class _ManualAddCollectibleScreenState
                 gradient: RadialGradient(
                   center: Alignment.topCenter,
                   radius: 1.2,
-                  colors: [
-                    AppColors.featureGlow,
-                    AppColors.background,
-                  ],
+                  colors: [AppColors.featureGlow, AppColors.background],
                 ),
               ),
             ),
@@ -681,18 +1024,14 @@ class _ManualAddCollectibleScreenState
                         ),
                         const SizedBox(height: AppSpacing.md),
                         Text(
-                          _isEditing
-                              ? 'Edit item.'
-                              : 'Add an item.',
+                          _screenTitle,
                           style: Theme.of(context).textTheme.headlineLarge,
                         ),
                         const SizedBox(height: AppSpacing.sm),
                         Text(
-                          'Save the basics first. Add more only if it helps.',
-                          style:
-                              Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: AppColors.onSurfaceVariant,
-                                  ),
+                          _screenDescription,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: AppColors.onSurfaceVariant),
                         ),
                         if ((widget.scannedBarcode ?? '').isNotEmpty) ...[
                           const SizedBox(height: AppSpacing.md),
@@ -712,159 +1051,241 @@ class _ManualAddCollectibleScreenState
                     140,
                   ),
                   sliver: SliverList(
-                    delegate: SliverChildListDelegate(
-                      [
-                        _SectionPanel(
-                          eyebrow: 'Photo',
-                          title: 'Add a photo',
-                          description: 'Optional, but helpful.',
-                          child: Column(
-                            children: [
-                              _PhotoPreview(
-                                selectedImage: selectedImage,
-                                existingPhotoUrl: widget.existingPhotoUrl,
-                                lookupImageUrl: widget.barcodeLookup?.imageUrl,
+                    delegate: SliverChildListDelegate([
+                      _SectionPanel(
+                        eyebrow: 'Photo',
+                        title: 'Add a photo',
+                        description: 'Optional, but helpful.',
+                        child: Column(
+                          children: [
+                            _PhotoPreview(
+                              selectedImage: selectedImage,
+                              existingPhotoUrl: widget.existingPhotoUrl,
+                              lookupImageUrl:
+                                  widget.identificationResult?.imageUrl,
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _ActionTileButton(
+                                    icon: Icons.camera_alt_outlined,
+                                    label: 'Take photo',
+                                    onTap: () => _pickImage(ImageSource.camera),
+                                  ),
+                                ),
+                                const SizedBox(width: AppSpacing.md),
+                                Expanded(
+                                  child: _ActionTileButton(
+                                    icon: Icons.photo_library_outlined,
+                                    label: 'Photo library',
+                                    onTap: () =>
+                                        _pickImage(ImageSource.gallery),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: _formSectionSpacing),
+                      _SectionPanel(
+                        eyebrow: 'Basics',
+                        title: _isComicMode
+                            ? 'Comic essentials'
+                            : 'Just enough to save it',
+                        description: _isComicMode
+                            ? 'Lead with the issue details, then refine the rest below.'
+                            : 'Save the essentials first. Everything else can wait.',
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CollectorTextField(
+                              label: 'Title',
+                              hintText: _isComicMode
+                                  ? 'Teenage Mutant Ninja Turtles #4'
+                                  : 'Vintage Batman figure',
+                              controller: _titleController,
+                              errorText: _titleError,
+                              textInputAction: TextInputAction.next,
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            const _BasicsDivider(),
+                            const SizedBox(height: AppSpacing.md),
+                            if (_isComicMode) ...[
+                              _SelectionField(
+                                label: 'Category',
+                                value: _resolvedCategoryDisplayValue(),
+                                helperText: 'Detected from identification',
+                                errorText: _categoryError,
+                                actionLabel: 'Locked',
+                                onTap: () {},
+                                isPlaceholder: false,
+                                enabled: false,
                               ),
                               const SizedBox(height: AppSpacing.md),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: _ActionTileButton(
-                                      icon: Icons.camera_alt_outlined,
-                                      label: 'Take photo',
-                                      onTap: () =>
-                                          _pickImage(ImageSource.camera),
-                                    ),
-                                  ),
-                                  const SizedBox(width: AppSpacing.md),
-                                  Expanded(
-                                    child: _ActionTileButton(
-                                      icon: Icons.photo_library_outlined,
-                                      label: 'Photo library',
-                                      onTap: () =>
-                                          _pickImage(ImageSource.gallery),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: _formSectionSpacing),
-                        _SectionPanel(
-                          eyebrow: 'Basics',
-                          title: 'Just enough to save it',
-                          description: 'Pick a category and give it a title.',
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
+                              const _BasicsDivider(),
+                              const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
-                                label: 'Title',
-                                hintText: 'Vintage Batman figure',
-                                controller: _titleController,
-                                errorText: _titleError,
+                                label: 'Series / Volume',
+                                hintText: 'Teenage Mutant Ninja Turtles',
+                                controller: _seriesController,
                                 textInputAction: TextInputAction.next,
                               ),
                               const SizedBox(height: AppSpacing.md),
                               const _BasicsDivider(),
                               const SizedBox(height: AppSpacing.md),
-                              _CategoryPicker(
-                                topCategories: _topCategories,
-                                moreCategories: _moreCategories,
-                                selectedCategory: _selectedCategory,
-                                useCustomCategory: _useCustomCategory,
-                                showMoreCategories: _showMoreCategories,
-                                customCategoryValue:
-                                    _customCategoryController.text.trim(),
-                                categoryError: _categoryError,
-                                onCategorySelected: _selectCategory,
-                                onCustomSelected: _openCustomCategorySheet,
-                                onToggleMore: _toggleMoreCategories,
+                              CollectorTextField(
+                                label: 'Issue number',
+                                hintText: '4',
+                                controller: _issueNumberController,
+                                keyboardType: TextInputType.number,
+                                textInputAction: TextInputAction.next,
                               ),
                               const SizedBox(height: AppSpacing.md),
                               const _BasicsDivider(),
                               const SizedBox(height: AppSpacing.md),
-                              _BrandPicker(
-                                label: 'Brand',
-                                tone: _ChipTone.brand,
-                                topOptions: _topBrands,
-                                moreOptions: _moreBrands,
-                                selectedValue: _selectedBrand,
-                                useCustomValue: _useCustomBrand,
-                                customValue:
-                                    _customBrandController.text.trim().isNotEmpty
-                                        ? _customBrandController.text.trim()
-                                        : (_selectedBrand ?? '').trim(),
-                                showMoreOptions: _showMoreBrands,
-                                onOptionSelected: _selectBrand,
-                                onCustomSelected: _openCustomBrandSheet,
-                                onToggleMore: _toggleMoreBrands,
-                                createActionLabel: 'Add brand',
-                                emptyHelperText:
-                                    'Brands from your collection will show up here as you add more items.',
+                              _SelectionField(
+                                label: _brandFieldLabel,
+                                value: _resolvedBrandDisplayValue(),
+                                helperText: _brandFieldHelperText,
+                                actionLabel: 'Choose',
+                                onTap: _openBrandSelectorSheet,
+                                isPlaceholder: (_resolvedBrand() ?? '')
+                                    .trim()
+                                    .isEmpty,
                               ),
                               const SizedBox(height: AppSpacing.md),
                               const _BasicsDivider(),
                               const SizedBox(height: AppSpacing.md),
-                              _TagsPicker(
-                                topTags: _topTags,
-                                moreTags: _moreTags,
-                                showMoreTags: _showMoreTags,
-                                selectedTagIds: _selectedTagIds,
-                                newTagNames: _newTagNames,
-                                onToggleMore: _toggleMoreTags,
-                                onToggleTag: _toggleTagSelection,
-                                onCreateTag: _openCreateTagSheet,
-                                onRemoveExistingTag: _removeSelectedTagId,
-                                onRemoveNewTag: _removeNewTag,
+                              CollectorTextField(
+                                label: 'Release year',
+                                hintText: '1985',
+                                controller: _releaseYearController,
+                                keyboardType: TextInputType.number,
+                                textInputAction: TextInputAction.next,
+                              ),
+                            ] else ...[
+                              _SelectionField(
+                                label: 'Category',
+                                value: _resolvedCategoryDisplayValue(),
+                                helperText: 'Required to save',
+                                errorText: _categoryError,
+                                actionLabel: 'Browse',
+                                onTap: _openCategorySelectorSheet,
+                                isPlaceholder: _resolvedCategory()
+                                    .trim()
+                                    .isEmpty,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              const _BasicsDivider(),
+                              const SizedBox(height: AppSpacing.md),
+                              _SelectionField(
+                                label: _brandFieldLabel,
+                                value: _resolvedBrandDisplayValue(),
+                                helperText: _brandFieldHelperText,
+                                actionLabel: 'Choose',
+                                onTap: _openBrandSelectorSheet,
+                                isPlaceholder: (_resolvedBrand() ?? '')
+                                    .trim()
+                                    .isEmpty,
                               ),
                             ],
-                          ),
+                          ],
                         ),
-                        const SizedBox(height: _formSectionSpacing),
-                        _ExpandableSectionPanel(
-                          eyebrow: 'Details',
-                          title: 'Add a little more',
-                          description: 'Only if it matters for this piece.',
-                          expanded: _detailsExpanded,
-                          onToggle: _toggleDetailsExpanded,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'CONDITION',
-                                style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                      const SizedBox(height: _formSectionSpacing),
+                      _ExpandableSectionPanel(
+                        eyebrow: 'Details',
+                        title: _isComicMode
+                            ? 'Comic details'
+                            : 'Add a little more',
+                        description: _isComicMode
+                            ? 'Descriptions and condition help once the issue details are in place.'
+                            : 'Use this for franchise, line, character, condition, and notes.',
+                        expanded: _detailsExpanded,
+                        onToggle: _toggleDetailsExpanded,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (_isComicMode) ...[
+                              _TextAreaField(
+                                label: 'Description',
+                                hintText:
+                                    'Leonardo deals with a betrayal in the present day...',
+                                controller: _descriptionController,
                               ),
-                              const SizedBox(height: AppSpacing.xxs),
-                              Text(
-                                'Choose one condition.',
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: AppColors.onSurfaceVariant,
+                            ] else ...[
+                              CollectorTextField(
+                                label: 'Franchise',
+                                hintText: 'Teenage Mutant Ninja Turtles',
+                                controller: _franchiseController,
+                                textInputAction: TextInputAction.next,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              CollectorTextField(
+                                label: _seriesFieldLabel,
+                                hintText: 'Vintage Collection',
+                                controller: _seriesController,
+                                textInputAction: TextInputAction.next,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              CollectorTextField(
+                                label: 'Character / Subject',
+                                hintText: 'Boba Fett',
+                                controller: _characterController,
+                                textInputAction: TextInputAction.next,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              CollectorTextField(
+                                label: 'Release year',
+                                hintText: '2024',
+                                controller: _releaseYearController,
+                                keyboardType: TextInputType.number,
+                                textInputAction: TextInputAction.next,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              _TextAreaField(
+                                label: 'Description',
+                                hintText:
+                                    'Loose figure with soft goods cape and blaster.',
+                                controller: _descriptionController,
+                              ),
+                            ],
+                            const SizedBox(height: AppSpacing.lg),
+                            Text(
+                              'CONDITION',
+                              style: Theme.of(context).textTheme.labelSmall,
+                            ),
+                            const SizedBox(height: AppSpacing.xxs),
+                            Text(
+                              'Choose one condition.',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: AppColors.onSurfaceVariant),
+                            ),
+                            const SizedBox(height: AppSpacing.sm),
+                            Wrap(
+                              spacing: AppSpacing.sm,
+                              runSpacing: AppSpacing.sm,
+                              children: _conditionOptions
+                                  .map(
+                                    (condition) => _SingleSelectChoiceChip(
+                                      label: condition,
+                                      tone: _ChipTone.neutral,
+                                      selected: _selectedCondition == condition,
+                                      onTap: () {
+                                        setState(() {
+                                          _selectedCondition =
+                                              _selectedCondition == condition
+                                              ? null
+                                              : condition;
+                                        });
+                                      },
                                     ),
-                              ),
-                              const SizedBox(height: AppSpacing.sm),
-                              Wrap(
-                                spacing: AppSpacing.sm,
-                                runSpacing: AppSpacing.sm,
-                                children: _conditionOptions
-                                    .map(
-                                      (condition) => _SingleSelectChoiceChip(
-                                        label: condition,
-                                        tone: _ChipTone.neutral,
-                                        selected:
-                                            _selectedCondition == condition,
-                                        onTap: () {
-                                          setState(() {
-                                            _selectedCondition =
-                                                _selectedCondition == condition
-                                                    ? null
-                                                    : condition;
-                                          });
-                                        },
-                                      ),
-                                    )
-                                    .toList(growable: false),
-                              ),
+                                  )
+                                  .toList(growable: false),
+                            ),
+                            if (!_isComicMode) ...[
                               const SizedBox(height: AppSpacing.lg),
                               Text(
                                 'BOX STATUS',
@@ -873,7 +1294,8 @@ class _ManualAddCollectibleScreenState
                               const SizedBox(height: AppSpacing.xxs),
                               Text(
                                 'Choose one box status.',
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
                                       color: AppColors.onSurfaceVariant,
                                     ),
                               ),
@@ -892,42 +1314,75 @@ class _ManualAddCollectibleScreenState
                                           setState(() {
                                             _selectedBoxStatus =
                                                 _selectedBoxStatus ==
-                                                        option.value
-                                                    ? null
-                                                    : option.value;
+                                                    option.value
+                                                ? null
+                                                : option.value;
                                           });
                                         },
                                       ),
                                     )
                                     .toList(growable: false),
                               ),
-                              const SizedBox(height: AppSpacing.lg),
-                              _QuantityCard(
-                                quantity: _quantity,
-                                onDecrement: () => _adjustQuantity(-1),
-                                onIncrement: () => _adjustQuantity(1),
-                              ),
-                              const SizedBox(height: AppSpacing.lg),
-                              CollectorTextField(
-                                label: 'Notes',
-                                hintText: 'Loose item, complete accessories.',
-                                controller: _notesController,
-                                textInputAction: TextInputAction.done,
-                              ),
                             ],
-                          ),
+                            const SizedBox(height: AppSpacing.lg),
+                            _QuantityCard(
+                              quantity: _quantity,
+                              onDecrement: () => _adjustQuantity(-1),
+                              onIncrement: () => _adjustQuantity(1),
+                            ),
+                            const SizedBox(height: AppSpacing.lg),
+                            CollectorTextField(
+                              label: 'Notes',
+                              hintText: _isComicMode
+                                  ? 'Raw copy, light spine ticks, bagged and boarded.'
+                                  : 'Loose item, complete accessories.',
+                              controller: _notesController,
+                              textInputAction: TextInputAction.done,
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: _formSectionSpacing),
-                        SizedBox(
-                          width: double.infinity,
-                          child: CollectorButton(
-                            label: _isEditing ? 'Save Changes' : 'Add Item',
-                            onPressed: _save,
-                            isLoading: _isSaving,
-                          ),
+                      ),
+                      const SizedBox(height: _formSectionSpacing),
+                      _SectionPanel(
+                        eyebrow: 'Collector Status',
+                        title: 'Mark how it fits your shelf',
+                        description:
+                            'Use a few structured collector states instead of turning them into tags.',
+                        child: _CollectorStatusPanel(
+                          isFavorite: _isFavorite,
+                          isGrail: _isGrail,
+                          isDuplicate: _isDuplicate,
+                          onToggle: _toggleCollectorState,
                         ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(height: _formSectionSpacing),
+                      _ExpandableSectionPanel(
+                        eyebrow: 'Organization',
+                        title: 'Tags and grouping',
+                        description:
+                            'Helpful for browsing later, but optional for the first save.',
+                        expanded: _organizationExpanded,
+                        onToggle: _toggleOrganizationExpanded,
+                        child: _TagOrganizerPanel(
+                          selectedExistingTags: _selectedExistingTags,
+                          newTagNames: _newTagNames,
+                          hasSavedTags: _availableTags.isNotEmpty,
+                          onManageSavedTags: _openSavedTagsPickerSheet,
+                          onCreateTag: _openCreateTagSheet,
+                          onRemoveExistingTag: _removeSelectedTagId,
+                          onRemoveNewTag: _removeNewTag,
+                        ),
+                      ),
+                      const SizedBox(height: _formSectionSpacing),
+                      SizedBox(
+                        width: double.infinity,
+                        child: CollectorButton(
+                          label: _isEditing ? 'Save Changes' : 'Add Item',
+                          onPressed: _save,
+                          isLoading: _isSaving,
+                        ),
+                      ),
+                    ]),
                   ),
                 ),
               ],
@@ -968,10 +1423,7 @@ class _PhotoPreview extends StatelessWidget {
             ? Stack(
                 fit: StackFit.expand,
                 children: [
-                  Image.file(
-                    File(selectedImage!.path),
-                    fit: BoxFit.cover,
-                  ),
+                  Image.file(File(selectedImage!.path), fit: BoxFit.cover),
                   Align(
                     alignment: Alignment.bottomLeft,
                     child: Container(
@@ -986,78 +1438,77 @@ class _PhotoPreview extends StatelessWidget {
                       ),
                       child: Text(
                         'Photo ready',
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                              color: Colors.white,
-                            ),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelLarge?.copyWith(color: Colors.white),
                       ),
                     ),
                   ),
                 ],
               )
-                : existingPhotoUrl != null
-                    ? Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.network(
-                        existingPhotoUrl!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
+            : existingPhotoUrl != null
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.network(
+                    existingPhotoUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
+                  ),
+                  Align(
+                    alignment: Alignment.bottomLeft,
+                    child: Container(
+                      margin: const EdgeInsets.all(AppSpacing.md),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
                       ),
-                      Align(
-                        alignment: Alignment.bottomLeft,
-                        child: Container(
-                          margin: const EdgeInsets.all(AppSpacing.md),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.48),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            'Current photo',
-                            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                  color: Colors.white,
-                                ),
-                          ),
-                        ),
-                        ),
-                      ],
-                    )
-                : lookupImageUrl != null
-                    ? Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Image.network(
-                            lookupImageUrl!,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
-                          ),
-                          Align(
-                            alignment: Alignment.bottomLeft,
-                            child: Container(
-                              margin: const EdgeInsets.all(AppSpacing.md),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.48),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                'Suggested image',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelLarge
-                                    ?.copyWith(color: Colors.white),
-                              ),
-                            ),
-                          ),
-                        ],
-                      )
-                : const _PhotoPreviewEmpty(),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.48),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'Current photo',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelLarge?.copyWith(color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : lookupImageUrl != null
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.network(
+                    lookupImageUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
+                  ),
+                  Align(
+                    alignment: Alignment.bottomLeft,
+                    child: Container(
+                      margin: const EdgeInsets.all(AppSpacing.md),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.48),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'Suggested image',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelLarge?.copyWith(color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : const _PhotoPreviewEmpty(),
       ),
     );
   }
@@ -1071,16 +1522,9 @@ class _PhotoPreviewEmpty extends StatelessWidget {
     return const Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(
-          Icons.add_a_photo_outlined,
-          size: 54,
-          color: AppColors.primary,
-        ),
+        Icon(Icons.add_a_photo_outlined, size: 54, color: AppColors.primary),
         SizedBox(height: AppSpacing.md),
-        Text(
-          'No photo selected yet',
-          textAlign: TextAlign.center,
-        ),
+        Text('No photo selected yet', textAlign: TextAlign.center),
       ],
     );
   }
@@ -1110,21 +1554,18 @@ class _SectionPanel extends StatelessWidget {
           Text(
             eyebrow.toUpperCase(),
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: AppColors.primary,
-                  letterSpacing: 1.1,
-                ),
+              color: AppColors.primary,
+              letterSpacing: 1.1,
+            ),
           ),
           const SizedBox(height: AppSpacing.sm),
-          Text(
-            title,
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: AppSpacing.xs),
           Text(
             description,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: _formPanelContentSpacing),
           child,
@@ -1173,7 +1614,8 @@ class _ExpandableSectionPanel extends StatelessWidget {
                       children: [
                         Text(
                           eyebrow.toUpperCase(),
-                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
                                 color: AppColors.primary,
                                 letterSpacing: 1.1,
                               ),
@@ -1186,10 +1628,8 @@ class _ExpandableSectionPanel extends StatelessWidget {
                         const SizedBox(height: AppSpacing.xs),
                         Text(
                           description,
-                          style:
-                              Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: AppColors.onSurfaceVariant,
-                                  ),
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: AppColors.onSurfaceVariant),
                         ),
                       ],
                     ),
@@ -1211,8 +1651,9 @@ class _ExpandableSectionPanel extends StatelessWidget {
               padding: const EdgeInsets.only(top: _formPanelContentSpacing),
               child: child,
             ),
-            crossFadeState:
-                expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+            crossFadeState: expanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
             duration: const Duration(milliseconds: 180),
           ),
         ],
@@ -1222,9 +1663,7 @@ class _ExpandableSectionPanel extends StatelessWidget {
 }
 
 class _ScannedBarcodeBanner extends StatelessWidget {
-  const _ScannedBarcodeBanner({
-    required this.barcode,
-  });
+  const _ScannedBarcodeBanner({required this.barcode});
 
   final String barcode;
 
@@ -1242,10 +1681,7 @@ class _ScannedBarcodeBanner extends StatelessWidget {
               color: AppColors.primary.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Icon(
-              Icons.qr_code_rounded,
-              color: AppColors.primary,
-            ),
+            child: const Icon(Icons.qr_code_rounded, color: AppColors.primary),
           ),
           const SizedBox(width: AppSpacing.md),
           Expanded(
@@ -1254,9 +1690,9 @@ class _ScannedBarcodeBanner extends StatelessWidget {
               children: [
                 Text(
                   'SCANNED BARCODE',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: AppColors.primary,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: AppColors.primary),
                 ),
                 const SizedBox(height: AppSpacing.xxs),
                 Text(
@@ -1274,279 +1710,183 @@ class _ScannedBarcodeBanner extends StatelessWidget {
   }
 }
 
-class _CategoryPicker extends StatelessWidget {
-  const _CategoryPicker({
-    required this.topCategories,
-    required this.moreCategories,
-    required this.selectedCategory,
-    required this.useCustomCategory,
-    required this.showMoreCategories,
-    required this.customCategoryValue,
-    required this.categoryError,
-    required this.onCategorySelected,
-    required this.onCustomSelected,
-    required this.onToggleMore,
-  });
-
-  final List<String> topCategories;
-  final List<String> moreCategories;
-  final String? selectedCategory;
-  final bool useCustomCategory;
-  final bool showMoreCategories;
-  final String customCategoryValue;
-  final String? categoryError;
-  final ValueChanged<String> onCategorySelected;
-  final VoidCallback onCustomSelected;
-  final VoidCallback onToggleMore;
-
-  @override
-  Widget build(BuildContext context) {
-    return _SuggestionPicker(
-      label: 'Category',
-      tone: _ChipTone.category,
-      topOptions: topCategories,
-      moreOptions: moreCategories,
-      selectedValue: selectedCategory,
-      useCustomValue: useCustomCategory,
-      customValue: customCategoryValue,
-      showMoreOptions: showMoreCategories,
-      errorText: categoryError,
-      onOptionSelected: onCategorySelected,
-      onCustomSelected: onCustomSelected,
-      onToggleMore: onToggleMore,
-      createActionLabel: 'Add category',
-    );
-  }
-}
-
-class _BrandPicker extends StatelessWidget {
-  const _BrandPicker({
+class _SelectionField extends StatelessWidget {
+  const _SelectionField({
     required this.label,
-    required this.tone,
-    required this.topOptions,
-    required this.moreOptions,
-    required this.selectedValue,
-    required this.useCustomValue,
-    required this.customValue,
-    required this.showMoreOptions,
-    required this.onOptionSelected,
-    required this.onCustomSelected,
-    required this.onToggleMore,
-    required this.createActionLabel,
-    this.emptyHelperText,
-  });
-
-  final String label;
-  final _ChipTone tone;
-  final List<String> topOptions;
-  final List<String> moreOptions;
-  final String? selectedValue;
-  final bool useCustomValue;
-  final String customValue;
-  final bool showMoreOptions;
-  final ValueChanged<String> onOptionSelected;
-  final VoidCallback onCustomSelected;
-  final VoidCallback onToggleMore;
-  final String createActionLabel;
-  final String? emptyHelperText;
-
-  @override
-  Widget build(BuildContext context) {
-    final resolvedSelectedValue = (selectedValue ?? '').trim();
-    final hasCustomSelectedValue =
-        useCustomValue &&
-        resolvedSelectedValue.isNotEmpty &&
-        !topOptions.contains(resolvedSelectedValue) &&
-        !moreOptions.contains(resolvedSelectedValue);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SuggestionPicker(
-          label: label,
-          tone: tone,
-          topOptions: topOptions,
-          moreOptions: moreOptions,
-          selectedValue: selectedValue,
-          useCustomValue: useCustomValue,
-          customValue: hasCustomSelectedValue ? resolvedSelectedValue : customValue,
-          showMoreOptions: showMoreOptions,
-          onOptionSelected: onOptionSelected,
-          onCustomSelected: onCustomSelected,
-          onToggleMore: onToggleMore,
-          createActionLabel: createActionLabel,
-          errorText: null,
-          emptyHelperText: emptyHelperText,
-        ),
-      ],
-    );
-  }
-}
-
-class _SuggestionPicker extends StatelessWidget {
-  const _SuggestionPicker({
-    required this.label,
-    required this.tone,
-    required this.topOptions,
-    required this.moreOptions,
-    required this.selectedValue,
-    required this.useCustomValue,
-    required this.customValue,
-    required this.showMoreOptions,
-    required this.onOptionSelected,
-    required this.onCustomSelected,
-    required this.onToggleMore,
-    required this.createActionLabel,
+    required this.value,
+    required this.helperText,
+    required this.actionLabel,
+    required this.onTap,
     this.errorText,
-    this.emptyHelperText,
+    this.isPlaceholder = false,
+    this.enabled = true,
   });
 
   final String label;
-  final _ChipTone tone;
-  final List<String> topOptions;
-  final List<String> moreOptions;
-  final String? selectedValue;
-  final bool useCustomValue;
-  final String customValue;
-  final bool showMoreOptions;
-  final ValueChanged<String> onOptionSelected;
-  final VoidCallback onCustomSelected;
-  final VoidCallback onToggleMore;
-  final String createActionLabel;
+  final String value;
+  final String helperText;
+  final String actionLabel;
+  final VoidCallback onTap;
   final String? errorText;
-  final String? emptyHelperText;
+  final bool isPlaceholder;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
-    final hasMoreOptions = moreOptions.isNotEmpty;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _PickerSectionHeader(
-          label: label.toUpperCase(),
-          helperText: 'Choose one option.',
-          showToggle: hasMoreOptions,
-          expanded: showMoreOptions,
-          onToggle: onToggleMore,
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        if (useCustomValue && customValue.isNotEmpty) ...[
-          _CustomValueSummaryCard(
-            title: 'Custom selection',
-            value: customValue,
-            tone: tone,
-            onEdit: onCustomSelected,
+        Text(
+          label.toUpperCase(),
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: enabled
+                ? AppColors.onSurfaceVariant
+                : AppColors.onSurfaceVariant.withValues(alpha: 0.7),
           ),
-          const SizedBox(height: AppSpacing.sm),
-        ],
-        if (topOptions.isNotEmpty)
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.sm,
-            children: [
-              ...topOptions.map(
-                (option) => _SingleSelectChoiceChip(
-                  label: option,
-                  tone: tone,
-                  selected: !useCustomValue && selectedValue == option,
-                  onTap: () => onOptionSelected(option),
-                ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        InkWell(
+          onTap: enabled ? onTap : null,
+          borderRadius: AppRadii.medium,
+          child: Ink(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: enabled
+                  ? AppColors.surfaceContainerHighest.withValues(alpha: 0.4)
+                  : AppColors.surfaceContainerHighest.withValues(alpha: 0.24),
+              borderRadius: AppRadii.medium,
+              border: Border.all(
+                color: (errorText ?? '').isNotEmpty
+                    ? AppColors.error.withValues(alpha: 0.6)
+                    : AppColors.outlineVariant.withValues(alpha: 0.22),
               ),
-            ],
-          )
-        else if ((emptyHelperText ?? '').isNotEmpty) ...[
-          Text(
-            emptyHelperText!,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        value,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: isPlaceholder
+                              ? AppColors.onSurfaceVariant
+                              : AppColors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.xxs),
+                      Text(
+                        errorText ?? helperText,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: (errorText ?? '').isNotEmpty
+                              ? AppColors.error
+                              : AppColors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-          ),
-        ],
-        if (showMoreOptions && moreOptions.isNotEmpty) ...[
-          const SizedBox(height: AppSpacing.sm),
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.sm,
-            children: moreOptions
-                .map(
-                (option) => _SingleSelectChoiceChip(
-                  label: option,
-                  tone: tone,
-                  selected: !useCustomValue && selectedValue == option,
-                  onTap: () => onOptionSelected(option),
+                const SizedBox(width: AppSpacing.sm),
+                TextButton.icon(
+                  onPressed: enabled ? onTap : null,
+                  style: TextButton.styleFrom(
+                    foregroundColor: enabled
+                        ? AppColors.primary
+                        : AppColors.onSurfaceVariant,
+                  ),
+                  icon: Icon(
+                    enabled ? Icons.search_rounded : Icons.lock_outline_rounded,
+                    size: 16,
+                  ),
+                  label: Text(actionLabel),
                 ),
-                )
-                .toList(growable: false),
+              ],
+            ),
           ),
-        ],
-        const SizedBox(height: AppSpacing.sm),
-        _ValueCreatorButton(
-          label: useCustomValue && customValue.isNotEmpty
-              ? 'Edit ${label.toLowerCase()}'
-              : createActionLabel,
-          onTap: onCustomSelected,
         ),
-        if (errorText != null) ...[
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            errorText!,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: AppColors.error,
-                ),
-          ),
-        ],
       ],
     );
   }
 }
 
-class _TagsPicker extends StatelessWidget {
-  const _TagsPicker({
-    required this.topTags,
-    required this.moreTags,
-    required this.showMoreTags,
-    required this.selectedTagIds,
+class _TextAreaField extends StatelessWidget {
+  const _TextAreaField({
+    required this.label,
+    required this.hintText,
+    required this.controller,
+  });
+
+  final String label;
+  final String hintText;
+  final TextEditingController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label.toUpperCase(),
+          style: Theme.of(context).textTheme.labelSmall,
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        TextField(
+          controller: controller,
+          minLines: 3,
+          maxLines: 5,
+          textInputAction: TextInputAction.newline,
+          decoration: InputDecoration(
+            hintText: hintText,
+            alignLabelWithHint: true,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: AppSpacing.md,
+            ),
+            enabledBorder: const OutlineInputBorder(
+              borderRadius: AppRadii.medium,
+              borderSide: BorderSide.none,
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: AppRadii.medium,
+              borderSide: BorderSide(
+                color: AppColors.primary.withValues(alpha: 0.5),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TagOrganizerPanel extends StatelessWidget {
+  const _TagOrganizerPanel({
+    required this.selectedExistingTags,
     required this.newTagNames,
-    required this.onToggleMore,
-    required this.onToggleTag,
+    required this.hasSavedTags,
+    required this.onManageSavedTags,
     required this.onCreateTag,
     required this.onRemoveExistingTag,
     required this.onRemoveNewTag,
   });
 
-  final List<TagModel> topTags;
-  final List<TagModel> moreTags;
-  final bool showMoreTags;
-  final Set<String> selectedTagIds;
+  final List<TagModel> selectedExistingTags;
   final List<String> newTagNames;
-  final VoidCallback onToggleMore;
-  final ValueChanged<String> onToggleTag;
+  final bool hasSavedTags;
+  final VoidCallback onManageSavedTags;
   final VoidCallback onCreateTag;
   final ValueChanged<String> onRemoveExistingTag;
   final ValueChanged<String> onRemoveNewTag;
 
   @override
   Widget build(BuildContext context) {
-    final selectedExistingTags = [
-      ...topTags,
-      ...moreTags,
-    ].where((tag) => selectedTagIds.contains(tag.id)).toList(growable: false);
-    final hasExistingSuggestions = topTags.isNotEmpty || moreTags.isNotEmpty;
-    final hasMoreTags = moreTags.isNotEmpty;
+    final hasTags = selectedExistingTags.isNotEmpty || newTagNames.isNotEmpty;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _PickerSectionHeader(
-          label: 'TAGS',
-          helperText: 'Add one or more tags.',
-          showToggle: hasMoreTags,
-          expanded: showMoreTags,
-          onToggle: onToggleMore,
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        if (selectedExistingTags.isNotEmpty || newTagNames.isNotEmpty) ...[
+        if (hasTags)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(AppSpacing.md),
@@ -1562,9 +1902,9 @@ class _TagsPicker extends StatelessWidget {
               children: [
                 Text(
                   'SELECTED TAGS',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: AppColors.tertiary,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: AppColors.tertiary),
                 ),
                 const SizedBox(height: AppSpacing.sm),
                 Wrap(
@@ -1589,158 +1929,443 @@ class _TagsPicker extends StatelessWidget {
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-        ],
-        if (selectedExistingTags.isEmpty && newTagNames.isEmpty) ...[
+          )
+        else
           Text(
-            'Selected tags will collect here as you add them.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
+            'Skip tags on the first save if you want. You can always organize it later.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: AppColors.onSurfaceVariant),
           ),
-          const SizedBox(height: AppSpacing.md),
-        ],
-        if (topTags.isNotEmpty)
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.sm,
-            children: topTags
-                .where((tag) => (tag.id ?? '').isNotEmpty)
-                .map(
-                (tag) => _TagSuggestionChip(
-                  label: tag.name,
-                  selected: selectedTagIds.contains(tag.id),
-                  onTap: () => onToggleTag(tag.id!),
-                ),
-                )
-                .toList(growable: false),
-          ),
-        if (!hasExistingSuggestions) ...[
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.sm,
-            children: [
-              _ValueCreatorButton(
-                label: 'Create new tag',
+        const SizedBox(height: AppSpacing.md),
+        Row(
+          children: [
+            Expanded(
+              child: _ActionTileButton(
+                icon: Icons.label_outline_rounded,
+                label: hasSavedTags ? 'Browse saved tags' : 'No saved tags yet',
+                onTap: hasSavedTags ? onManageSavedTags : onCreateTag,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: _ActionTileButton(
+                icon: Icons.add_rounded,
+                label: 'Create tag',
                 onTap: onCreateTag,
               ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            'Your saved tags will start showing up here as you use them.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
-          ),
-        ] else
-          const SizedBox(height: AppSpacing.sm),
-        if (showMoreTags && moreTags.isNotEmpty) ...[
-          const SizedBox(height: AppSpacing.sm),
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.sm,
-            children: moreTags
-                .where((tag) => (tag.id ?? '').isNotEmpty)
-                .map(
-                (tag) => _TagSuggestionChip(
-                  label: tag.name,
-                  selected: selectedTagIds.contains(tag.id),
-                  onTap: () => onToggleTag(tag.id!),
-                ),
-                )
-                .toList(growable: false),
-          ),
-        ],
-        if (hasExistingSuggestions)
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.sm,
-            children: [
-              _ValueCreatorButton(
-                label: 'Create new tag',
-                onTap: onCreateTag,
-              ),
-            ],
-          ),
+            ),
+          ],
+        ),
       ],
     );
   }
 }
 
-class _PickerSectionHeader extends StatelessWidget {
-  const _PickerSectionHeader({
-    required this.label,
-    required this.showToggle,
-    required this.expanded,
+enum CollectorState { favorite, grail, duplicate }
+
+class _CollectorStatusPanel extends StatelessWidget {
+  const _CollectorStatusPanel({
+    required this.isFavorite,
+    required this.isGrail,
+    required this.isDuplicate,
     required this.onToggle,
-    this.helperText,
   });
 
-  final String label;
-  final bool showToggle;
-  final bool expanded;
-  final VoidCallback onToggle;
-  final String? helperText;
+  final bool isFavorite;
+  final bool isGrail;
+  final bool isDuplicate;
+  final ValueChanged<CollectorState> onToggle;
 
   @override
   Widget build(BuildContext context) {
-    final labelStyle = Theme.of(context).textTheme.labelSmall;
-    final toggleStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: AppColors.primary,
-        );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Wrap(
+      spacing: AppSpacing.sm,
+      runSpacing: AppSpacing.sm,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                style: labelStyle,
-              ),
-            ),
-            if (showToggle)
-              TextButton(
-                onPressed: onToggle,
-                style: TextButton.styleFrom(
-                  padding: EdgeInsets.zero,
-                  minimumSize: const Size(0, 0),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  foregroundColor: AppColors.primary,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      expanded ? 'Show less' : 'Show more',
-                      style: toggleStyle,
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      expanded
-                          ? Icons.keyboard_arrow_up_rounded
-                          : Icons.keyboard_arrow_down_rounded,
-                      size: 18,
-                      color: AppColors.primary,
-                    ),
-                  ],
-                ),
-              ),
-          ],
+        _StatusToggleChip(
+          label: 'Favorite',
+          icon: Icons.favorite_rounded,
+          selected: isFavorite,
+          tone: _ChipTone.tag,
+          onTap: () => onToggle(CollectorState.favorite),
         ),
-        if ((helperText ?? '').isNotEmpty) ...[
-          const SizedBox(height: AppSpacing.xxs),
-          Text(
-            helperText!,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
+        _StatusToggleChip(
+          label: 'Grail',
+          icon: Icons.workspace_premium_rounded,
+          selected: isGrail,
+          tone: _ChipTone.brand,
+          onTap: () => onToggle(CollectorState.grail),
+        ),
+        _StatusToggleChip(
+          label: 'Duplicate',
+          icon: Icons.copy_all_rounded,
+          selected: isDuplicate,
+          tone: _ChipTone.category,
+          onTap: () => onToggle(CollectorState.duplicate),
+        ),
+      ],
+    );
+  }
+}
+
+class _OptionSearchBottomSheet extends StatefulWidget {
+  const _OptionSearchBottomSheet({
+    required this.title,
+    required this.description,
+    required this.searchHint,
+    required this.options,
+    required this.selectedValue,
+    required this.createActionLabel,
+    this.emptyStateLabel,
+  });
+
+  final String title;
+  final String description;
+  final String searchHint;
+  final List<String> options;
+  final String? selectedValue;
+  final String createActionLabel;
+  final String? emptyStateLabel;
+
+  @override
+  State<_OptionSearchBottomSheet> createState() =>
+      _OptionSearchBottomSheetState();
+}
+
+class _OptionSearchBottomSheetState extends State<_OptionSearchBottomSheet> {
+  final _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final normalizedOptions = widget.options.toSet().toList(growable: false)
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final filteredOptions = normalizedOptions
+        .where(
+          (option) =>
+              _query.trim().isEmpty ||
+              option.toLowerCase().contains(_query.trim().toLowerCase()),
+        )
+        .toList(growable: false);
+
+    return _SelectionBottomSheetShell(
+      title: widget.title,
+      description: widget.description,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CollectorSearchField(
+            hintText: widget.searchHint,
+            controller: _searchController,
+            readOnly: false,
+            onChanged: (value) {
+              setState(() {
+                _query = value;
+              });
+            },
+          ),
+          const SizedBox(height: AppSpacing.md),
+          _SheetActionRow(
+            label: widget.createActionLabel,
+            icon: Icons.add_rounded,
+            onTap: () => Navigator.of(context).pop(_createValueSentinel),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: filteredOptions.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(AppSpacing.lg),
+                      child: Text(
+                        widget.emptyStateLabel ?? 'No matches yet',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppColors.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: filteredOptions.length,
+                    separatorBuilder: (_, _) =>
+                        const SizedBox(height: AppSpacing.xs),
+                    itemBuilder: (context, index) {
+                      final option = filteredOptions[index];
+                      final isSelected = widget.selectedValue == option;
+                      return _SheetSelectableRow(
+                        label: option,
+                        selected: isSelected,
+                        onTap: () => Navigator.of(context).pop(option),
+                      );
+                    },
+                  ),
           ),
         ],
-      ],
+      ),
+    );
+  }
+}
+
+class _TagSearchBottomSheet extends StatefulWidget {
+  const _TagSearchBottomSheet({
+    required this.availableTags,
+    required this.selectedTagIds,
+  });
+
+  final List<TagModel> availableTags;
+  final Set<String> selectedTagIds;
+
+  @override
+  State<_TagSearchBottomSheet> createState() => _TagSearchBottomSheetState();
+}
+
+class _TagSearchBottomSheetState extends State<_TagSearchBottomSheet> {
+  final _searchController = TextEditingController();
+  late final Set<String> _workingSelection = {...widget.selectedTagIds};
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filteredTags =
+        widget.availableTags
+            .where((tag) {
+              final tagName = tag.name.trim().toLowerCase();
+              return _query.trim().isEmpty ||
+                  tagName.contains(_query.trim().toLowerCase());
+            })
+            .toList(growable: false)
+          ..sort(
+            (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+          );
+
+    return _SelectionBottomSheetShell(
+      title: 'Browse saved tags',
+      description:
+          'Search and toggle the tags you want without opening a giant chip wall.',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CollectorSearchField(
+            hintText: 'Search tags',
+            controller: _searchController,
+            readOnly: false,
+            onChanged: (value) {
+              setState(() {
+                _query = value;
+              });
+            },
+          ),
+          const SizedBox(height: AppSpacing.md),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: filteredTags.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(AppSpacing.lg),
+                      child: Text(
+                        'No saved tags match this search.',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppColors.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: filteredTags.length,
+                    separatorBuilder: (_, _) =>
+                        const SizedBox(height: AppSpacing.xs),
+                    itemBuilder: (context, index) {
+                      final tag = filteredTags[index];
+                      final tagId = tag.id;
+                      if (tagId == null || tagId.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      final isSelected = _workingSelection.contains(tagId);
+                      return _SheetSelectableRow(
+                        label: tag.name,
+                        selected: isSelected,
+                        onTap: () {
+                          setState(() {
+                            if (isSelected) {
+                              _workingSelection.remove(tagId);
+                            } else {
+                              _workingSelection.add(tagId);
+                            }
+                          });
+                        },
+                      );
+                    },
+                  ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          SizedBox(
+            width: double.infinity,
+            child: CollectorButton(
+              label: 'Apply tags',
+              onPressed: () => Navigator.of(context).pop(_workingSelection),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectionBottomSheetShell extends StatelessWidget {
+  const _SelectionBottomSheetShell({
+    required this.title,
+    required this.description,
+    required this.child,
+  });
+
+  final String title;
+  final String description;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.surfaceContainerHigh,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.md,
+            AppSpacing.lg,
+            AppSpacing.lg + MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.outlineVariant.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Text(title, style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                description,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              child,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SheetActionRow extends StatelessWidget {
+  const _SheetActionRow({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SheetSelectableRow(
+      label: label,
+      selected: false,
+      leadingIcon: icon,
+      onTap: onTap,
+    );
+  }
+}
+
+class _SheetSelectableRow extends StatelessWidget {
+  const _SheetSelectableRow({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.leadingIcon,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final IconData? leadingIcon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: AppRadii.medium,
+        child: Ink(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.12)
+                : AppColors.surfaceContainer,
+            borderRadius: AppRadii.medium,
+            border: Border.all(
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.4)
+                  : AppColors.outlineVariant.withValues(alpha: 0.18),
+            ),
+          ),
+          child: Row(
+            children: [
+              if (leadingIcon != null) ...[
+                Icon(leadingIcon, color: AppColors.primary, size: 18),
+                const SizedBox(width: AppSpacing.sm),
+              ],
+              Expanded(
+                child: Text(
+                  label,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Icon(
+                selected
+                    ? Icons.check_circle_rounded
+                    : Icons.chevron_right_rounded,
+                color: selected
+                    ? AppColors.primary
+                    : AppColors.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1754,67 +2379,6 @@ class _BasicsDivider extends StatelessWidget {
       width: double.infinity,
       height: 1,
       color: AppColors.onSurfaceVariant.withValues(alpha: 0.24),
-    );
-  }
-}
-
-class _CustomValueSummaryCard extends StatelessWidget {
-  const _CustomValueSummaryCard({
-    required this.title,
-    required this.value,
-    required this.tone,
-    required this.onEdit,
-  });
-
-  final String title;
-  final String value;
-  final _ChipTone tone;
-  final VoidCallback onEdit;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = _chipPaletteForTone(tone);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: palette.selectedBackground,
-        borderRadius: AppRadii.medium,
-        border: Border.all(color: palette.selectedBorder),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title.toUpperCase(),
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: palette.selectedForeground,
-                      ),
-                ),
-                const SizedBox(height: AppSpacing.xxs),
-                Text(
-                  value,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        color: palette.selectedForeground,
-                      ),
-                ),
-              ],
-            ),
-          ),
-          TextButton.icon(
-            onPressed: onEdit,
-            style: TextButton.styleFrom(
-              foregroundColor: palette.selectedForeground,
-            ),
-            icon: const Icon(Icons.edit_rounded, size: 16),
-            label: const Text('Edit'),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -1833,38 +2397,45 @@ class _SelectedTagChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = _chipPaletteForTone(tone);
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 12,
-        vertical: 8,
-      ),
-      decoration: BoxDecoration(
-        color: palette.selectedBackground,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: palette.selectedBorder,
+    final maxChipWidth = MediaQuery.sizeOf(context).width * 0.72;
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxChipWidth),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: palette.selectedBackground,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: palette.selectedBorder),
         ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
                   color: palette.selectedForeground,
                 ),
-          ),
-          const SizedBox(width: 6),
-          InkWell(
-            onTap: onRemove,
-            borderRadius: BorderRadius.circular(999),
-            child: Icon(
-              Icons.close_rounded,
-              size: 16,
-              color: palette.selectedForeground,
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 6),
+            InkWell(
+              onTap: onRemove,
+              borderRadius: BorderRadius.circular(999),
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: Icon(
+                  Icons.close_rounded,
+                  size: 16,
+                  color: palette.selectedForeground,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1900,11 +2471,70 @@ class _ActionTileButton extends StatelessWidget {
         children: [
           Icon(icon, color: AppColors.primary),
           const SizedBox(height: AppSpacing.xs),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-          ),
+          Text(label, textAlign: TextAlign.center),
         ],
+      ),
+    );
+  }
+}
+
+class _StatusToggleChip extends StatelessWidget {
+  const _StatusToggleChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.tone,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final _ChipTone tone;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _chipPaletteForTone(tone);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          decoration: BoxDecoration(
+            color: selected ? palette.selectedBackground : palette.background,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: selected ? palette.selectedBorder : palette.border,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: selected
+                    ? palette.selectedForeground
+                    : palette.foreground,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: selected
+                      ? palette.selectedForeground
+                      : palette.foreground,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1938,16 +2568,13 @@ class _QuantityCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Quantity',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
+                Text('Quantity', style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: AppSpacing.xxs),
                 Text(
                   'Multiple copies only.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppColors.onSurfaceVariant,
-                      ),
+                    color: AppColors.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -1963,10 +2590,7 @@ class _QuantityCard extends StatelessWidget {
               style: Theme.of(context).textTheme.titleLarge,
             ),
           ),
-          _StepperButton(
-            icon: Icons.add_rounded,
-            onTap: onIncrement,
-          ),
+          _StepperButton(icon: Icons.add_rounded, onTap: onIncrement),
         ],
       ),
     );
@@ -1974,10 +2598,7 @@ class _QuantityCard extends StatelessWidget {
 }
 
 class _StepperButton extends StatelessWidget {
-  const _StepperButton({
-    required this.icon,
-    required this.onTap,
-  });
+  const _StepperButton({required this.icon, required this.onTap});
 
   final IconData icon;
   final VoidCallback? onTap;
@@ -2032,10 +2653,7 @@ class _SingleSelectChoiceChip extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(
-            horizontal: 12,
-            vertical: 10,
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
             color: selected ? palette.selectedBackground : palette.background,
             borderRadius: BorderRadius.circular(18),
@@ -2073,106 +2691,15 @@ class _SingleSelectChoiceChip extends StatelessWidget {
               Text(
                 label,
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: selected
-                          ? palette.selectedForeground
-                          : palette.foreground,
-                    ),
+                  color: selected
+                      ? palette.selectedForeground
+                      : palette.foreground,
+                ),
               ),
             ],
           ),
         ),
       ),
-    );
-  }
-}
-
-class _TagSuggestionChip extends StatelessWidget {
-  const _TagSuggestionChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = _chipPaletteForTone(_ChipTone.tag);
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: AppRadii.pill,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: selected ? palette.selectedBackground : palette.background,
-            borderRadius: AppRadii.pill,
-            border: Border.all(
-              color: selected ? palette.selectedBorder : palette.border,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                selected ? Icons.check_rounded : Icons.add_rounded,
-                size: 14,
-                color: selected
-                    ? palette.selectedForeground
-                    : palette.foreground,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: selected
-                          ? palette.selectedForeground
-                          : palette.foreground,
-                    ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ValueCreatorButton extends StatelessWidget {
-  const _ValueCreatorButton({
-    required this.label,
-    required this.onTap,
-  });
-
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: onTap,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: AppColors.onSurface,
-        side: BorderSide(
-          color: AppColors.outlineVariant.withValues(alpha: 0.24),
-        ),
-        backgroundColor: AppColors.surfaceContainerHighest.withValues(alpha: 0.2),
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md,
-          vertical: 10,
-        ),
-        shape: const RoundedRectangleBorder(
-          borderRadius: AppRadii.medium,
-        ),
-      ),
-      icon: const Icon(Icons.add_rounded),
-      label: Text(label),
     );
   }
 }
@@ -2270,8 +2797,8 @@ class _ValueInputBottomSheetState extends State<_ValueInputBottomSheet> {
                 Text(
                   widget.description,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: AppColors.onSurfaceVariant,
-                      ),
+                    color: AppColors.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(height: AppSpacing.lg),
                 CollectorTextField(
@@ -2298,12 +2825,7 @@ class _ValueInputBottomSheetState extends State<_ValueInputBottomSheet> {
   }
 }
 
-enum _ChipTone {
-  neutral,
-  category,
-  brand,
-  tag,
-}
+enum _ChipTone { neutral, category, brand, tag }
 
 class _ChipPalette {
   const _ChipPalette({
@@ -2365,10 +2887,7 @@ _ChipPalette _chipPaletteForTone(_ChipTone tone) {
 }
 
 class _BoxStatusOption {
-  const _BoxStatusOption({
-    required this.label,
-    required this.value,
-  });
+  const _BoxStatusOption({required this.label, required this.value});
 
   final String label;
   final String value;

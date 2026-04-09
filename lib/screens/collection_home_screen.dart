@@ -16,13 +16,10 @@ import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/collector_section_header.dart';
 import '../widgets/collector_text_field.dart';
-import 'collection_search_screen.dart';
 import 'category_collection_screen.dart';
 import 'collectible_detail_screen.dart';
 
 const _homeTopChromeColor = AppColors.dashboardGlow;
-const _homeSearchFillColor = AppColors.searchFieldFill;
-const _homeSearchForegroundColor = AppColors.searchFieldForeground;
 
 class CollectionHomeScreen extends StatefulWidget {
   const CollectionHomeScreen({
@@ -31,6 +28,7 @@ class CollectionHomeScreen extends StatefulWidget {
     required this.refreshSeed,
     required this.onAddFirstItem,
     required this.onScanItem,
+    required this.onOpenSearch,
     required this.onOpenProfile,
   });
 
@@ -38,6 +36,7 @@ class CollectionHomeScreen extends StatefulWidget {
   final int refreshSeed;
   final VoidCallback onAddFirstItem;
   final VoidCallback onScanItem;
+  final VoidCallback onOpenSearch;
   final VoidCallback onOpenProfile;
 
   @override
@@ -72,15 +71,25 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
     final wishlistItems = await _wishlistRepository.fetchAll();
     final profile = await _profileRepository.fetchCurrentProfile();
     final recentItems = collectibles.take(6).toList(growable: false);
-    final recentIds =
-        recentItems.map((item) => item.id).whereType<String>().toList(growable: false);
-    final primaryPhotos = await _photosRepository.fetchPrimaryPhotoMap(recentIds);
+    final favoriteItems = collectibles
+        .where((item) => item.isFavorite)
+        .take(6)
+        .toList(growable: false);
+    final homeShelfIds = <String>{
+      ...recentItems.map((item) => item.id).whereType<String>(),
+      ...favoriteItems.map((item) => item.id).whereType<String>(),
+    }.toList(growable: false);
+    final primaryPhotos = await _photosRepository.fetchPrimaryPhotoMap(
+      homeShelfIds,
+    );
 
-    final recentPhotoUrls = <String, String>{};
+    final homePhotoUrls = <String, String>{};
     for (final entry in primaryPhotos.entries) {
-      final signedUrl = await _photosRepository.createSignedPhotoUrl(entry.value);
+      final signedUrl = await _photosRepository.createSignedPhotoUrl(
+        entry.value,
+      );
       if (signedUrl != null) {
-        recentPhotoUrls[entry.key] = signedUrl;
+        homePhotoUrls[entry.key] = signedUrl;
       }
     }
 
@@ -94,7 +103,8 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
       collectibles: collectibles,
       wishlistCount: wishlistItems.length,
       recentItems: recentItems,
-      recentPhotoUrls: recentPhotoUrls,
+      favoriteItems: favoriteItems,
+      homePhotoUrls: homePhotoUrls,
     );
   }
 
@@ -132,9 +142,7 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
           }
 
           if (data == null) {
-            return const CollectorLoadingOverlay(
-              label: 'Refreshing home...',
-            );
+            return const CollectorLoadingOverlay(label: 'Refreshing home...');
           }
 
           if (data.collectibles.isEmpty) {
@@ -152,6 +160,7 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
                 data: data,
                 collectibles: data.collectibles,
                 onCollectionChanged: _reload,
+                onOpenSearch: widget.onOpenSearch,
                 onOpenProfile: widget.onOpenProfile,
               ),
               if (isRefreshing)
@@ -176,12 +185,14 @@ class _LoadedHomeState extends StatefulWidget {
     required this.data,
     required this.collectibles,
     required this.onCollectionChanged,
+    required this.onOpenSearch,
     required this.onOpenProfile,
   });
 
   final _CollectionHomeData data;
   final List<CollectibleModel> collectibles;
   final Future<void> Function() onCollectionChanged;
+  final VoidCallback onOpenSearch;
   final VoidCallback onOpenProfile;
 
   @override
@@ -217,20 +228,6 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
     });
   }
 
-  Future<void> _openSearch() async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => const CollectionSearchScreen(),
-      ),
-    );
-
-    if (!mounted || changed != true) {
-      return;
-    }
-
-    await widget.onCollectionChanged();
-  }
-
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
@@ -238,12 +235,13 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
     final compactLayout = screenWidth < 380 || textScale > 1.1;
     final categoryHighlights = _buildCategoryHighlights(widget.collectibles);
     final recentItems = widget.data.recentItems;
+    final favoriteItems = widget.data.favoriteItems;
 
     return Column(
       children: [
         _HomeTopChrome(
           searchOnly: _showSearchOnly,
-          onSearchTap: _openSearch,
+          onSearchTap: widget.onOpenSearch,
           profile: widget.data.profile,
           profileAvatarUrl: widget.data.profileAvatarUrl,
           onOpenProfile: widget.onOpenProfile,
@@ -251,9 +249,12 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
         Expanded(
           child: SingleChildScrollView(
             controller: _scrollController,
+            physics: const BouncingScrollPhysics(
+              parent: AlwaysScrollableScrollPhysics(),
+            ),
             padding: const EdgeInsets.fromLTRB(
               AppSpacing.md,
-              AppSpacing.xl,
+              AppSpacing.md,
               AppSpacing.md,
               140,
             ),
@@ -264,9 +265,9 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                   title: 'Categories',
                   trailing: Text(
                     'From Your Collection',
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: AppColors.primary,
-                        ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelLarge?.copyWith(color: AppColors.primary),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.md),
@@ -280,7 +281,7 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                   LayoutBuilder(
                     builder: (context, constraints) {
                       final availableWidth = constraints.maxWidth;
-                      final cardHeight = compactLayout ? 128.0 : 136.0;
+                      final cardHeight = compactLayout ? 76.0 : 84.0;
                       final twoColumnWidth =
                           (availableWidth - AppSpacing.md) / 2;
 
@@ -288,30 +289,42 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                         spacing: AppSpacing.md,
                         runSpacing: AppSpacing.md,
                         children: [
-                          for (var index = 0;
-                              index < categoryHighlights.length;
-                              index++)
-                            SizedBox(
+                          for (
+                            var index = 0;
+                            index < categoryHighlights.length;
+                            index++
+                          )
+                            _CategoryShowcaseTile(
                               width: _categoryCardWidthForIndex(
                                 index: index,
                                 itemCount: categoryHighlights.length,
                                 fullWidth: availableWidth,
                                 halfWidth: twoColumnWidth,
                               ),
+                              alignToCenter: _categoryCardShouldCenterForIndex(
+                                index: index,
+                                itemCount: categoryHighlights.length,
+                              ),
                               child: _CategoryShowcaseCard(
                                 category: categoryHighlights[index],
                                 compactLayout: compactLayout,
                                 height: cardHeight,
                                 onTap: () async {
-                                  await Navigator.of(context).push<bool>(
-                                    MaterialPageRoute<bool>(
-                                      builder: (_) => CategoryCollectionScreen(
-                                        category: categoryHighlights[index].title,
-                                      ),
-                                    ),
-                                  );
+                                  final changed = await Navigator.of(context)
+                                      .push<bool>(
+                                        MaterialPageRoute<bool>(
+                                          builder: (_) =>
+                                              CategoryCollectionScreen(
+                                                category:
+                                                    categoryHighlights[index]
+                                                        .title,
+                                              ),
+                                        ),
+                                      );
 
-                                  await widget.onCollectionChanged();
+                                  if (changed == true) {
+                                    await widget.onCollectionChanged();
+                                  }
                                 },
                               ),
                             ),
@@ -324,9 +337,9 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                   title: 'Recently Added',
                   trailing: Text(
                     'Latest Arrivals',
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: AppColors.primary,
-                        ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelLarge?.copyWith(color: AppColors.primary),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.md),
@@ -347,8 +360,49 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                           const SizedBox(width: AppSpacing.md),
                       itemBuilder: (context, index) {
                         final item = recentItems[index];
-                        final photoUrl =
-                            item.id == null ? null : widget.data.recentPhotoUrls[item.id];
+                        final photoUrl = item.id == null
+                            ? null
+                            : widget.data.homePhotoUrls[item.id];
+                        return _RecentCollectibleCard(
+                          collectible: item,
+                          photoUrl: photoUrl,
+                          compactLayout: compactLayout,
+                          onCollectionChanged: widget.onCollectionChanged,
+                        );
+                      },
+                    ),
+                  ),
+                const SizedBox(height: AppSpacing.section),
+                CollectorSectionHeader(
+                  title: 'Favorites',
+                  trailing: Text(
+                    'Collector Picks',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelLarge?.copyWith(color: AppColors.primary),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                if (favoriteItems.isEmpty)
+                  const _InlineMessagePanel(
+                    title: 'No favorites yet.',
+                    description:
+                        'Star the pieces you love most and they will live here for quick access.',
+                  )
+                else
+                  SizedBox(
+                    height: compactLayout ? 216 : 244,
+                    child: ListView.separated(
+                      clipBehavior: Clip.none,
+                      scrollDirection: Axis.horizontal,
+                      itemCount: favoriteItems.length,
+                      separatorBuilder: (_, _) =>
+                          const SizedBox(width: AppSpacing.md),
+                      itemBuilder: (context, index) {
+                        final item = favoriteItems[index];
+                        final photoUrl = item.id == null
+                            ? null
+                            : widget.data.homePhotoUrls[item.id];
                         return _RecentCollectibleCard(
                           collectible: item,
                           photoUrl: photoUrl,
@@ -381,13 +435,19 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
         return byCount == 0 ? a.key.compareTo(b.key) : byCount;
       });
 
-    return entries.take(6).toList().asMap().entries.map((entry) {
-      return _CategoryHighlight(
-        title: entry.value.key,
-        count: entry.value.value,
-        style: _resolveCategoryCardStyle(entry.key),
-      );
-    }).toList(growable: false);
+    return entries
+        .take(6)
+        .toList()
+        .asMap()
+        .entries
+        .map((entry) {
+          return _CategoryHighlight(
+            title: entry.value.key,
+            count: entry.value.value,
+            style: _resolveCategoryCardStyle(entry.key),
+          );
+        })
+        .toList(growable: false);
   }
 
   _CategoryCardStyle _resolveCategoryCardStyle(int index) {
@@ -433,26 +493,34 @@ class _EmptyHomeState extends StatelessWidget {
           child: LayoutBuilder(
             builder: (context, constraints) {
               return SingleChildScrollView(
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
+                ),
                 padding: const EdgeInsets.fromLTRB(
                   AppSpacing.md,
-                  AppSpacing.xl,
+                  AppSpacing.md,
                   AppSpacing.md,
                   140,
                 ),
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
-                    minHeight: constraints.maxHeight - AppSpacing.xl - 140,
+                    minHeight: constraints.maxHeight - AppSpacing.md - 140,
                   ),
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 480),
                       child: CollectorPanel(
                         padding: EdgeInsets.symmetric(
-                          horizontal: compactLayout ? AppSpacing.lg : AppSpacing.xl,
-                          vertical: compactLayout ? AppSpacing.xl : AppSpacing.xxl,
+                          horizontal: compactLayout
+                              ? AppSpacing.lg
+                              : AppSpacing.xl,
+                          vertical: compactLayout
+                              ? AppSpacing.xl
+                              : AppSpacing.xxl,
                         ),
-                        backgroundColor:
-                            AppColors.surfaceContainer.withValues(alpha: 0.92),
+                        backgroundColor: AppColors.surfaceContainer.withValues(
+                          alpha: 0.92,
+                        ),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -472,7 +540,9 @@ class _EmptyHomeState extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(999),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: AppColors.primary.withValues(alpha: 0.24),
+                                    color: AppColors.primary.withValues(
+                                      alpha: 0.24,
+                                    ),
                                     blurRadius: 18,
                                     spreadRadius: 2,
                                   ),
@@ -489,7 +559,8 @@ class _EmptyHomeState extends StatelessWidget {
                                     ? 'Your archive is currently empty. Start cataloging your toys, board games, and comics to build your digital vault.'
                                     : 'Your archive is currently empty. Turn that wishlist momentum into a real collection and build your digital vault.',
                                 textAlign: TextAlign.center,
-                                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                style: Theme.of(context).textTheme.bodyLarge
+                                    ?.copyWith(
                                       color: AppColors.onSurfaceVariant,
                                       height: 1.5,
                                     ),
@@ -592,22 +663,19 @@ class _HomeHeaderBar extends StatelessWidget {
     if (searchOnly) {
       return CollectorSearchField(
         hintText: 'Search your collection...',
-        fillColor: _homeSearchFillColor,
-        iconColor: _homeSearchForegroundColor,
-        hintColor: _homeSearchForegroundColor,
+        fillColor: AppColors.surfaceContainerHighest.withValues(alpha: 0.78),
         onTap: onSearchTap,
       );
     }
 
-    final titleStyle = Theme.of(context).textTheme.headlineMedium?.copyWith(
-          fontSize: 24,
-          height: 1.05,
-        );
+    final titleStyle = Theme.of(
+      context,
+    ).textTheme.headlineMedium?.copyWith(fontSize: 24, height: 1.05);
     final subtitleStyle = Theme.of(context).textTheme.bodyLarge?.copyWith(
-          fontWeight: FontWeight.w500,
-          color: AppColors.primary.withValues(alpha: 0.88),
-          letterSpacing: -0.2,
-        );
+      fontWeight: FontWeight.w500,
+      color: AppColors.primary.withValues(alpha: 0.88),
+      letterSpacing: -0.2,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -646,9 +714,7 @@ class _HomeHeaderBar extends StatelessWidget {
         const SizedBox(height: AppSpacing.lg),
         CollectorSearchField(
           hintText: 'Search your collection...',
-          fillColor: _homeSearchFillColor,
-          iconColor: _homeSearchForegroundColor,
-          hintColor: _homeSearchForegroundColor,
+          fillColor: AppColors.surfaceContainerHighest.withValues(alpha: 0.78),
           onTap: onSearchTap,
         ),
       ],
@@ -688,8 +754,8 @@ class _HomeProfilePlaceholder extends StatelessWidget {
     final initialsSource = (displayName?.isNotEmpty == true
         ? displayName!
         : username?.isNotEmpty == true
-            ? username!
-            : 'Collector');
+        ? username!
+        : 'Collector');
 
     final initials = initialsSource
         .split(RegExp(r'\s+'))
@@ -719,7 +785,8 @@ class _HomeProfilePlaceholder extends StatelessWidget {
                 ? Image.network(
                     profileAvatarUrl!,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => _HomeAvatarFallback(initials: initials),
+                    errorBuilder: (_, _, _) =>
+                        _HomeAvatarFallback(initials: initials),
                   )
                 : _HomeAvatarFallback(initials: initials),
           ),
@@ -730,9 +797,7 @@ class _HomeProfilePlaceholder extends StatelessWidget {
 }
 
 class _HomeAvatarFallback extends StatelessWidget {
-  const _HomeAvatarFallback({
-    required this.initials,
-  });
+  const _HomeAvatarFallback({required this.initials});
 
   final String initials;
 
@@ -753,9 +818,9 @@ class _HomeAvatarFallback extends StatelessWidget {
         child: Text(
           initials.isEmpty ? 'C' : initials,
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: AppColors.onSurface,
-                fontWeight: FontWeight.w700,
-              ),
+            color: AppColors.onSurface,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );
@@ -783,31 +848,34 @@ class _CategoryShowcaseCard extends StatelessWidget {
         builder: (context, constraints) {
           final denseCard = constraints.maxWidth < 220;
           final cardPadding = denseCard
-              ? const EdgeInsets.symmetric(horizontal: 14, vertical: 12)
-              : EdgeInsets.all(compactLayout ? AppSpacing.md : AppSpacing.lg);
+              ? const EdgeInsets.symmetric(horizontal: 14, vertical: 8)
+              : EdgeInsets.symmetric(
+                  horizontal: compactLayout ? AppSpacing.md : AppSpacing.lg,
+                  vertical: compactLayout ? 8 : 10,
+                );
           final cardRadius = denseCard ? 24.0 : 28.0;
           final titleStyle = Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontSize: denseCard
-                    ? 17
-                    : compactLayout
-                        ? 18
-                        : 20,
-                height: denseCard ? 0.98 : 1.0,
-                fontWeight: FontWeight.w700,
-                letterSpacing: denseCard ? -0.65 : -0.45,
-                color: category.style.titleColor,
-              );
+            fontSize: denseCard
+                ? 17
+                : compactLayout
+                ? 18
+                : 20,
+            height: denseCard ? 0.98 : 1.0,
+            fontWeight: FontWeight.w700,
+            letterSpacing: denseCard ? -0.65 : -0.45,
+            color: category.style.titleColor,
+          );
           final countStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
-                fontFamily: AppFonts.inter,
-                fontSize: denseCard
-                    ? 12
-                    : compactLayout
-                        ? 12.5
-                        : 13,
-                fontWeight: FontWeight.w500,
-                height: 1.1,
-                color: category.style.itemCountColor.withValues(alpha: 0.8),
-              );
+            fontFamily: AppFonts.inter,
+            fontSize: denseCard
+                ? 12
+                : compactLayout
+                ? 12.5
+                : 13,
+            fontWeight: FontWeight.w500,
+            height: 1.1,
+            color: category.style.itemCountColor.withValues(alpha: 0.8),
+          );
 
           return Material(
             color: Colors.transparent,
@@ -821,9 +889,7 @@ class _CategoryShowcaseCard extends StatelessWidget {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(cardRadius),
                   color: category.style.backgroundColor,
-                  border: Border.all(
-                    color: category.style.borderColor,
-                  ),
+                  border: Border.all(color: category.style.borderColor),
                 ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -845,7 +911,7 @@ class _CategoryShowcaseCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(height: AppSpacing.sm),
+                    const SizedBox(height: 8),
                     Text(
                       '${category.count} item${category.count == 1 ? '' : 's'}',
                       maxLines: 1,
@@ -863,6 +929,32 @@ class _CategoryShowcaseCard extends StatelessWidget {
   }
 }
 
+class _CategoryShowcaseTile extends StatelessWidget {
+  const _CategoryShowcaseTile({
+    required this.width,
+    required this.alignToCenter,
+    required this.child,
+  });
+
+  final double width;
+  final bool alignToCenter;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final card = SizedBox(width: width, child: child);
+
+    if (!alignToCenter) {
+      return card;
+    }
+
+    return SizedBox(
+      width: double.infinity,
+      child: Align(alignment: Alignment.center, child: card),
+    );
+  }
+}
+
 double _categoryCardWidthForIndex({
   required int index,
   required int itemCount,
@@ -876,10 +968,17 @@ double _categoryCardWidthForIndex({
   final isLastItem = index == itemCount - 1;
   final hasOddCount = itemCount.isOdd;
   if (isLastItem && hasOddCount) {
-    return fullWidth;
+    return halfWidth;
   }
 
   return halfWidth;
+}
+
+bool _categoryCardShouldCenterForIndex({
+  required int index,
+  required int itemCount,
+}) {
+  return itemCount > 1 && itemCount.isOdd && index == itemCount - 1;
 }
 
 class _RecentCollectibleCard extends StatelessWidget {
@@ -971,21 +1070,18 @@ class _RecentCollectibleCard extends StatelessWidget {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: compactLayout
-                              ? Theme.of(context).textTheme.titleSmall?.copyWith(
-                                    fontSize: 15,
-                                    height: 1.1,
-                                  )
-                              : Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    fontSize: 17,
-                                    height: 1.1,
-                                  ),
+                              ? Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(fontSize: 15, height: 1.1)
+                              : Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontSize: 17, height: 1.1),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           collectible.category,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
                                 fontSize: compactLayout ? 11 : 12,
                                 height: 1.2,
                                 color: AppColors.onSurfaceVariant,
@@ -1005,10 +1101,7 @@ class _RecentCollectibleCard extends StatelessWidget {
 }
 
 class _InlineMessagePanel extends StatelessWidget {
-  const _InlineMessagePanel({
-    required this.title,
-    required this.description,
-  });
+  const _InlineMessagePanel({required this.title, required this.description});
 
   final String title;
   final String description;
@@ -1025,9 +1118,9 @@ class _InlineMessagePanel extends StatelessWidget {
           const SizedBox(height: AppSpacing.xs),
           Text(
             description,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
           ),
         ],
       ),
@@ -1036,9 +1129,7 @@ class _InlineMessagePanel extends StatelessWidget {
 }
 
 class _EmptyStateArtwork extends StatelessWidget {
-  const _EmptyStateArtwork({
-    required this.compactLayout,
-  });
+  const _EmptyStateArtwork({required this.compactLayout});
 
   final bool compactLayout;
 
@@ -1135,8 +1226,8 @@ class _HomeMessageState extends StatelessWidget {
               Text(
                 description,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
+                  color: AppColors.onSurfaceVariant,
+                ),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -1154,7 +1245,8 @@ class _CollectionHomeData {
     required this.collectibles,
     required this.wishlistCount,
     required this.recentItems,
-    required this.recentPhotoUrls,
+    required this.favoriteItems,
+    required this.homePhotoUrls,
   });
 
   final ProfileModel? profile;
@@ -1162,7 +1254,8 @@ class _CollectionHomeData {
   final List<CollectibleModel> collectibles;
   final int wishlistCount;
   final List<CollectibleModel> recentItems;
-  final Map<String, String> recentPhotoUrls;
+  final List<CollectibleModel> favoriteItems;
+  final Map<String, String> homePhotoUrls;
 }
 
 class _CategoryHighlight {
@@ -1186,40 +1279,40 @@ class _CategoryCardStyle {
   });
 
   const _CategoryCardStyle.rose()
-      : backgroundColor = AppColors.categoryRoseBackground,
-        borderColor = AppColors.categoryRoseBorder,
-        titleColor = AppColors.categoryRoseForeground,
-        itemCountColor = AppColors.categoryRoseForeground;
+    : backgroundColor = AppColors.categoryRoseBackground,
+      borderColor = AppColors.categoryRoseBorder,
+      titleColor = AppColors.categoryRoseForeground,
+      itemCountColor = AppColors.categoryRoseForeground;
 
   const _CategoryCardStyle.violet()
-      : backgroundColor = AppColors.categoryVioletBackground,
-        borderColor = AppColors.categoryVioletBorder,
-        titleColor = AppColors.categoryVioletForeground,
-        itemCountColor = AppColors.categoryVioletForeground;
+    : backgroundColor = AppColors.categoryVioletBackground,
+      borderColor = AppColors.categoryVioletBorder,
+      titleColor = AppColors.categoryVioletForeground,
+      itemCountColor = AppColors.categoryVioletForeground;
 
   const _CategoryCardStyle.amber()
-      : backgroundColor = AppColors.categoryAmberBackground,
-        borderColor = AppColors.categoryAmberBorder,
-        titleColor = AppColors.categoryAmberForeground,
-        itemCountColor = AppColors.categoryAmberForeground;
+    : backgroundColor = AppColors.categoryAmberBackground,
+      borderColor = AppColors.categoryAmberBorder,
+      titleColor = AppColors.categoryAmberForeground,
+      itemCountColor = AppColors.categoryAmberForeground;
 
   const _CategoryCardStyle.azure()
-      : backgroundColor = AppColors.categoryAzureBackground,
-        borderColor = AppColors.categoryAzureBorder,
-        titleColor = AppColors.categoryAzureForeground,
-        itemCountColor = AppColors.categoryAzureForeground;
+    : backgroundColor = AppColors.categoryAzureBackground,
+      borderColor = AppColors.categoryAzureBorder,
+      titleColor = AppColors.categoryAzureForeground,
+      itemCountColor = AppColors.categoryAzureForeground;
 
   const _CategoryCardStyle.emerald()
-      : backgroundColor = AppColors.categoryEmeraldBackground,
-        borderColor = AppColors.categoryEmeraldBorder,
-        titleColor = AppColors.categoryEmeraldForeground,
-        itemCountColor = AppColors.categoryEmeraldForeground;
+    : backgroundColor = AppColors.categoryEmeraldBackground,
+      borderColor = AppColors.categoryEmeraldBorder,
+      titleColor = AppColors.categoryEmeraldForeground,
+      itemCountColor = AppColors.categoryEmeraldForeground;
 
   const _CategoryCardStyle.slate()
-      : backgroundColor = AppColors.categorySlateBackground,
-        borderColor = AppColors.categorySlateBorder,
-        titleColor = AppColors.categorySlateForeground,
-        itemCountColor = AppColors.categorySlateForeground;
+    : backgroundColor = AppColors.categorySlateBackground,
+      borderColor = AppColors.categorySlateBorder,
+      titleColor = AppColors.categorySlateForeground,
+      itemCountColor = AppColors.categorySlateForeground;
 
   final Color backgroundColor;
   final Color borderColor;

@@ -624,46 +624,48 @@ class _CollectionSearchSortSheet extends StatelessWidget {
             AppSpacing.lg,
             AppSpacing.lg,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(999),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.outlineVariant.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Sort Results',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'Choose how search results should be ordered.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              for (final option in _CollectionSearchSortOption.values)
-                ListTile(
-                  onTap: () => Navigator.of(context).pop(option),
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(option.label),
-                  trailing: option == selected
-                      ? const Icon(
-                          Icons.check_rounded,
-                          color: AppColors.primary,
-                        )
-                      : null,
+                const SizedBox(height: AppSpacing.lg),
+                Text(
+                  'Sort Results',
+                  style: Theme.of(context).textTheme.headlineSmall,
                 ),
-            ],
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  'Choose how search results should be ordered.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                for (final option in _CollectionSearchSortOption.values)
+                  ListTile(
+                    onTap: () => Navigator.of(context).pop(option),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(option.label),
+                    trailing: option == selected
+                        ? const Icon(
+                            Icons.check_rounded,
+                            color: AppColors.primary,
+                          )
+                        : null,
+                  ),
+              ],
+            ),
           ),
         ),
       ),

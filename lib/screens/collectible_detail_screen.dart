@@ -11,7 +11,7 @@ import '../widgets/collector_panel.dart';
 import 'manual_add_collectible_screen.dart';
 
 const _detailHeaderBottomSpacing = AppSpacing.xl;
-const _detailSectionSpacing = 28.0;
+const _detailSectionSpacing = 20.0;
 
 class CollectibleDetailScreen extends StatefulWidget {
   const CollectibleDetailScreen({
@@ -24,7 +24,8 @@ class CollectibleDetailScreen extends StatefulWidget {
   final String? photoUrl;
 
   @override
-  State<CollectibleDetailScreen> createState() => _CollectibleDetailScreenState();
+  State<CollectibleDetailScreen> createState() =>
+      _CollectibleDetailScreenState();
 }
 
 class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
@@ -67,9 +68,7 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.error,
-              ),
+              style: FilledButton.styleFrom(backgroundColor: AppColors.error),
               child: const Text('Delete'),
             ),
           ],
@@ -101,9 +100,7 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
       final messenger = ScaffoldMessenger.of(context);
       Navigator.of(context).pop(true);
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Collectible removed.'),
-        ),
+        const SnackBar(content: Text('Collectible removed.')),
       );
     } catch (_) {
       if (!mounted) {
@@ -127,6 +124,8 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final collectible = widget.collectible;
+    final isComic = _isComicCollectible(collectible);
+    final purchasePriceText = _formatCurrency(collectible.purchasePrice);
     final identityFields = <_DetailField>[
       ...?_fieldAsList('Brand', _normalizedText(collectible.brand)),
       ...?_fieldAsList(
@@ -143,18 +142,25 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
       ),
     ];
     final collectorFields = <_DetailField>[
-      ...?_fieldAsList('Condition', _collectorStatusText(collectible.itemCondition)),
-      ...?_fieldAsList('Box status', _collectorStatusText(collectible.boxStatus)),
-      _DetailField(label: 'Quantity', value: '${collectible.quantity}'),
+      ...?_fieldAsList(
+        'Condition',
+        _collectorStatusText(collectible.itemCondition),
+      ),
+      if (!isComic)
+      ...?_fieldAsList(
+        'Box status',
+        _collectorStatusText(collectible.boxStatus),
+      ),
+      ...?_fieldAsList('Cost', purchasePriceText),
       ...?_fieldAsList('Acquired', _formatDate(collectible.acquiredOn)),
-      if (collectible.openToTrade)
-        const _DetailField(label: 'Trade status', value: 'Open to trade'),
     ];
     final catalogFields = <_DetailField>[
       ...?_fieldAsList('Item number', _normalizedText(collectible.itemNumber)),
       ...?_fieldAsList('Barcode', _normalizedText(collectible.barcode)),
-      ...?_fieldAsList('Purchase price', _formatCurrency(collectible.purchasePrice)),
-      ...?_fieldAsList('Estimated value', _formatCurrency(collectible.estimatedValue)),
+      ...?_fieldAsList(
+        'Estimated value',
+        _formatCurrency(collectible.estimatedValue),
+      ),
     ];
 
     return Scaffold(
@@ -166,10 +172,7 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
                 gradient: RadialGradient(
                   center: Alignment.topCenter,
                   radius: 1.15,
-                  colors: [
-                    AppColors.featureGlow,
-                    AppColors.background,
-                  ],
+                  colors: [AppColors.featureGlow, AppColors.background],
                 ),
               ),
             ),
@@ -229,14 +232,17 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
                                   color: AppColors.surfaceContainerHighest,
                                   borderRadius: BorderRadius.circular(16),
                                   border: Border.all(
-                                    color:
-                                        AppColors.outlineVariant.withValues(alpha: 0.2),
+                                    color: AppColors.outlineVariant.withValues(
+                                      alpha: 0.2,
+                                    ),
                                   ),
                                 ),
                                 child: _isDeleting
                                     ? const Padding(
                                         padding: EdgeInsets.all(12),
-                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
                                       )
                                     : const Icon(
                                         Icons.more_horiz_rounded,
@@ -250,6 +256,7 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
                         _DetailHero(
                           collectible: collectible,
                           photoUrl: widget.photoUrl,
+                          isComic: isComic,
                         ),
                       ],
                     ),
@@ -262,103 +269,97 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
                     AppSpacing.md,
                     120,
                   ),
-                      sliver: SliverList(
-                    delegate: SliverChildListDelegate(
-                      [
-                        if (collectible.tags.isNotEmpty) ...[
-                          _DetailSection(
-                            title: 'Tags',
-                            child: Wrap(
-                              spacing: AppSpacing.sm,
-                              runSpacing: AppSpacing.sm,
-                              children: [
-                                for (final tag in collectible.tags)
-                                  CollectorChip(
-                                    label: tag.name,
-                                    tone: CollectorChipTone.primary,
-                                  ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: _detailSectionSpacing),
-                        ],
+                  sliver: SliverList(
+                    delegate: SliverChildListDelegate([
+                      if (collectible.tags.isNotEmpty) ...[
                         _DetailSection(
-                          title: 'Collector Snapshot',
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          title: 'Tags',
+                          child: Wrap(
+                            spacing: AppSpacing.sm,
+                            runSpacing: AppSpacing.sm,
                             children: [
-                              Wrap(
-                                spacing: AppSpacing.sm,
-                                runSpacing: AppSpacing.sm,
-                                children: [
-                                  CollectorChip(
-                                    label: collectible.category,
-                                  ),
-                                  if (collectible.isFavorite)
-                                    const CollectorChip(
-                                      label: 'Favorite',
-                                      tone: CollectorChipTone.primary,
-                                    ),
-                                  if (collectible.isGrail)
-                                    const CollectorChip(
-                                      label: 'Grail',
-                                      tone: CollectorChipTone.secondary,
-                                    ),
-                                  if (collectible.isDuplicate)
-                                    const CollectorChip(
-                                      label: 'Duplicate',
-                                      tone: CollectorChipTone.tertiary,
-                                    ),
-                                  if (collectible.openToTrade)
-                                    const CollectorChip(
-                                      label: 'Open to Trade',
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              _SnapshotMetricsGrid(
-                                collectible: collectible,
-                              ),
+                              for (final tag in collectible.tags)
+                                CollectorChip(
+                                  label: tag.name,
+                                  tone: CollectorChipTone.primary,
+                                ),
                             ],
                           ),
                         ),
-                        if (identityFields.isNotEmpty) ...[
-                          const SizedBox(height: _detailSectionSpacing),
-                          _DetailSection(
-                            title: 'Identity',
-                            child: _DetailFactGrid(fields: identityFields),
-                          ),
-                        ],
-                        if (collectorFields.isNotEmpty) ...[
-                          const SizedBox(height: _detailSectionSpacing),
-                          _DetailSection(
-                            title: 'Collector Data',
-                            child: _DetailFactGrid(fields: collectorFields),
-                          ),
-                        ],
-                        if (catalogFields.isNotEmpty) ...[
-                          const SizedBox(height: _detailSectionSpacing),
-                          _DetailSection(
-                            title: 'Value & Catalog',
-                            child: _DetailFactGrid(fields: catalogFields),
-                          ),
-                        ],
-                        if ((collectible.notes ?? '').isNotEmpty) ...[
-                          const SizedBox(height: _detailSectionSpacing),
-                          _DetailSection(
-                            title: 'Notes',
-                            child: Text(
-                              collectible.notes!,
-                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: AppColors.onSurfaceVariant,
-                                    fontSize: 14,
-                                    height: 1.55,
-                                  ),
-                            ),
-                          ),
-                        ],
+                        const SizedBox(height: _detailSectionSpacing),
                       ],
-                    ),
+                      _DetailSection(
+                        title: 'Collector Snapshot',
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: AppSpacing.sm,
+                              runSpacing: AppSpacing.sm,
+                              children: [
+                                CollectorChip(label: collectible.category),
+                                if (collectible.isFavorite)
+                                  const CollectorChip(
+                                    label: 'Favorite',
+                                    tone: CollectorChipTone.primary,
+                                  ),
+                                if (collectible.isGrail)
+                                  const CollectorChip(
+                                    label: 'Grail',
+                                    tone: CollectorChipTone.secondary,
+                                  ),
+                                if (collectible.isDuplicate)
+                                  const CollectorChip(
+                                    label: 'Duplicate',
+                                    tone: CollectorChipTone.tertiary,
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            _SnapshotMetricsGrid(
+                              collectible: collectible,
+                              isComic: isComic,
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (identityFields.isNotEmpty) ...[
+                        const SizedBox(height: _detailSectionSpacing),
+                        _DetailSection(
+                          title: 'Identity',
+                          child: _DetailFactGrid(fields: identityFields),
+                        ),
+                      ],
+                      if (collectorFields.isNotEmpty) ...[
+                        const SizedBox(height: _detailSectionSpacing),
+                        _DetailSection(
+                          title: 'Collector Data',
+                          child: _DetailFactGrid(fields: collectorFields),
+                        ),
+                      ],
+                      if (catalogFields.isNotEmpty) ...[
+                        const SizedBox(height: _detailSectionSpacing),
+                        _DetailSection(
+                          title: 'Value & Catalog',
+                          child: _DetailFactGrid(fields: catalogFields),
+                        ),
+                      ],
+                      if ((collectible.notes ?? '').isNotEmpty) ...[
+                        const SizedBox(height: _detailSectionSpacing),
+                        _DetailSection(
+                          title: 'Notes',
+                          child: Text(
+                            collectible.notes!,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: AppColors.onSurfaceVariant,
+                                  fontSize: 14,
+                                  height: 1.55,
+                                ),
+                          ),
+                        ),
+                      ],
+                    ]),
                   ),
                 ),
               ],
@@ -370,27 +371,26 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
   }
 }
 
-enum _DetailAction {
-  edit,
-  delete,
-}
+enum _DetailAction { edit, delete }
 
 class _DetailHero extends StatelessWidget {
   const _DetailHero({
     required this.collectible,
     required this.photoUrl,
+    required this.isComic,
   });
 
   final CollectibleModel collectible;
   final String? photoUrl;
+  final bool isComic;
 
   @override
   Widget build(BuildContext context) {
     final accentColor = _accentColorFor(collectible);
-    final secondaryAccent =
-        collectible.isGrail ? AppColors.tertiary : AppColors.secondary;
+    final secondaryAccent = collectible.isGrail
+        ? AppColors.tertiary
+        : AppColors.secondary;
     final subtitleParts = _distinctNonEmptyText([collectible.brand]);
-
     return CollectorPanel(
       padding: const EdgeInsets.all(AppSpacing.sm),
       backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.94),
@@ -513,7 +513,8 @@ class _DetailHero extends StatelessWidget {
                         if (subtitleParts.isNotEmpty)
                           Text(
                             subtitleParts.join(' • ').toUpperCase(),
-                            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            style: Theme.of(context).textTheme.labelMedium
+                                ?.copyWith(
                                   color: accentColor.withValues(alpha: 0.95),
                                   fontSize: 11,
                                   letterSpacing: 1.4,
@@ -523,10 +524,8 @@ class _DetailHero extends StatelessWidget {
                           const SizedBox(height: AppSpacing.xs),
                         Text(
                           collectible.title,
-                          style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                                fontSize: 23,
-                                height: 1.06,
-                              ),
+                          style: Theme.of(context).textTheme.headlineLarge
+                              ?.copyWith(fontSize: 23, height: 1.06),
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -535,7 +534,8 @@ class _DetailHero extends StatelessWidget {
                           _buildHeroSummary(collectible),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
                                 color: AppColors.onSurfaceVariant,
                                 fontSize: 14,
                                 height: 1.35,
@@ -549,28 +549,80 @@ class _DetailHero extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.md),
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.sm,
-            children: [
-              _HeroMetricCard(
-                label: 'Condition',
-                value: _collectorStatusText(collectible.itemCondition) ?? 'Unrated',
-                accentColor: accentColor,
-              ),
-              _HeroMetricCard(
-                label: 'Box',
-                value: _collectorStatusText(collectible.boxStatus) ?? 'Unknown',
-                accentColor: secondaryAccent,
-              ),
-              _HeroMetricCard(
-                label: 'Quantity',
-                value: '${collectible.quantity}',
-                accentColor: AppColors.primary,
-              ),
-            ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (isComic) {
+                return Row(
+                  children: [
+                    SizedBox(
+                      width: 88,
+                      child: _HeroMetricCard(
+                        label: 'Issue',
+                        value: _normalizedText(collectible.itemNumber) ?? 'Unknown',
+                        accentColor: accentColor,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: _HeroMetricCard(
+                        label: 'Publisher',
+                        value: _normalizedText(collectible.brand) ?? 'Unknown',
+                        accentColor: secondaryAccent,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    SizedBox(
+                      width: 88,
+                      child: _HeroMetricCard(
+                        label: 'Year',
+                        value: collectible.releaseYear?.toString() ?? 'Unknown',
+                        accentColor: AppColors.primary,
+                      ),
+                    ),
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: _HeroMetricCard(
+                      label: 'Condition',
+                      value:
+                          _collectorStatusText(collectible.itemCondition) ??
+                          'Unrated',
+                      accentColor: accentColor,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    flex: 2,
+                    child: _HeroMetricCard(
+                      label: 'Box',
+                      value:
+                          _collectorStatusText(collectible.boxStatus) ??
+                          'Unknown',
+                      accentColor: secondaryAccent,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    flex: 3,
+                    child: _HeroMetricCard(
+                      label: 'Cost',
+                      value:
+                          _formatCurrency(collectible.purchasePrice) ??
+                          'Not tracked',
+                      accentColor: AppColors.primary,
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
-          if (collectible.purchasePrice != null || collectible.estimatedValue != null) ...[
+          if (collectible.purchasePrice != null ||
+              collectible.estimatedValue != null) ...[
             const SizedBox(height: AppSpacing.sm),
             _HeroValueStrip(
               purchasePrice: collectible.purchasePrice,
@@ -584,10 +636,7 @@ class _DetailHero extends StatelessWidget {
 }
 
 class _DetailSection extends StatelessWidget {
-  const _DetailSection({
-    required this.title,
-    required this.child,
-  });
+  const _DetailSection({required this.title, required this.child});
 
   final String title;
   final Widget child;
@@ -602,11 +651,11 @@ class _DetailSection extends StatelessWidget {
         children: [
           Text(
             title,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontSize: 20,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontSize: 18),
           ),
-          const SizedBox(height: AppSpacing.sm),
+          const SizedBox(height: AppSpacing.xs),
           child,
         ],
       ),
@@ -617,9 +666,11 @@ class _DetailSection extends StatelessWidget {
 class _SnapshotMetricsGrid extends StatelessWidget {
   const _SnapshotMetricsGrid({
     required this.collectible,
+    required this.isComic,
   });
 
   final CollectibleModel collectible;
+  final bool isComic;
 
   @override
   Widget build(BuildContext context) {
@@ -628,49 +679,74 @@ class _SnapshotMetricsGrid extends StatelessWidget {
         label: 'Condition',
         value: _collectorStatusText(collectible.itemCondition) ?? 'Unrated',
       ),
+      if (!isComic)
+        _DetailField(
+          label: 'Box status',
+          value: _collectorStatusText(collectible.boxStatus) ?? 'Unknown',
+        ),
       _DetailField(
-        label: 'Box status',
-        value: _collectorStatusText(collectible.boxStatus) ?? 'Unknown',
+        label: 'Cost',
+        value: _formatCurrency(collectible.purchasePrice) ?? 'Not tracked',
       ),
-      _DetailField(label: 'Quantity', value: '${collectible.quantity}'),
       _DetailField(
         label: 'Estimated value',
-        value: _formatCurrency(collectible.estimatedValue) ??
-            _formatCurrency(collectible.purchasePrice) ??
+        value:
+            _formatCurrency(collectible.estimatedValue) ??
             'Not tracked',
       ),
     ];
 
-    return _DetailFactGrid(fields: metrics);
+    return _DetailFactGrid(
+      fields: metrics,
+      preferredColumns: 2,
+      minColumnWidth: 132,
+      horizontalSpacing: AppSpacing.sm,
+      verticalSpacing: AppSpacing.xs,
+    );
   }
 }
 
 class _DetailFactGrid extends StatelessWidget {
   const _DetailFactGrid({
     required this.fields,
+    this.preferredColumns = 2,
+    this.minColumnWidth = 144,
+    this.horizontalSpacing = AppSpacing.md,
+    this.verticalSpacing = AppSpacing.sm,
   });
 
   final List<_DetailField> fields;
+  final int preferredColumns;
+  final double minColumnWidth;
+  final double horizontalSpacing;
+  final double verticalSpacing;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final singleColumn = constraints.maxWidth < 340;
+        final maxWidth = constraints.maxWidth;
+        final supportsPreferredColumns =
+            preferredColumns > 1 &&
+            maxWidth >=
+                (preferredColumns * minColumnWidth) +
+                    ((preferredColumns - 1) * horizontalSpacing);
+        final columnCount = supportsPreferredColumns ? preferredColumns : 1;
+        final itemWidth = columnCount == 1
+            ? maxWidth
+            : (maxWidth - ((columnCount - 1) * horizontalSpacing)) /
+                columnCount;
 
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: fields.length,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: singleColumn ? 1 : 2,
-            crossAxisSpacing: AppSpacing.md,
-            mainAxisSpacing: AppSpacing.sm,
-            childAspectRatio: singleColumn ? 4.2 : 2.6,
-          ),
-          itemBuilder: (context, index) {
-            return _DetailFactTile(field: fields[index]);
-          },
+        return Wrap(
+          spacing: horizontalSpacing,
+          runSpacing: verticalSpacing,
+          children: [
+            for (final field in fields)
+              SizedBox(
+                width: itemWidth,
+                child: _DetailFactTile(field: field),
+              ),
+          ],
         );
       },
     );
@@ -678,46 +754,37 @@ class _DetailFactGrid extends StatelessWidget {
 }
 
 class _DetailFactTile extends StatelessWidget {
-  const _DetailFactTile({
-    required this.field,
-  });
+  const _DetailFactTile({required this.field});
 
   final _DetailField field;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 2,
-        vertical: 6,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.transparent,
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             field.label.toUpperCase(),
-            maxLines: 2,
+            maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                  fontSize: 10,
-                  letterSpacing: 1.5,
-                  height: 1.25,
-                ),
+              color: AppColors.onSurfaceVariant,
+              fontSize: 10,
+              letterSpacing: 1.35,
+              height: 1.05,
+            ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 3),
           Text(
             field.value,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontSize: 15,
-                  height: 1.15,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontSize: 15, height: 1.08),
           ),
         ],
       ),
@@ -739,8 +806,7 @@ class _HeroMetricCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: const BoxConstraints(minWidth: 96),
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
@@ -750,28 +816,35 @@ class _HeroMetricCard extends StatelessWidget {
             AppColors.surfaceContainerHighest.withValues(alpha: 0.76),
           ],
         ),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: accentColor.withValues(alpha: 0.22),
-        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: accentColor.withValues(alpha: 0.22)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             label.toUpperCase(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                  fontSize: 10,
-                ),
+              color: AppColors.onSurfaceVariant,
+              fontSize: 10,
+              letterSpacing: 1.2,
+            ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           Text(
             value,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontSize: 15,
-                  color: accentColor,
-                ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(
+              fontSize: 14,
+              height: 1.05,
+              color: accentColor,
+            ),
           ),
         ],
       ),
@@ -807,9 +880,7 @@ class _HeroValueStrip extends StatelessWidget {
           ],
         ),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: AppColors.primary.withValues(alpha: 0.22),
-        ),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.22)),
       ),
       child: Row(
         children: [
@@ -860,17 +931,16 @@ class _ValueMetric extends StatelessWidget {
       children: [
         Text(
           label.toUpperCase(),
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: AppColors.onSurfaceVariant,
-              ),
+          style: Theme.of(
+            context,
+          ).textTheme.labelSmall?.copyWith(color: AppColors.onSurfaceVariant),
         ),
         const SizedBox(height: 4),
         Text(
           value,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontSize: 17,
-                color: accentColor,
-              ),
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontSize: 17, color: accentColor),
         ),
       ],
     );
@@ -878,10 +948,7 @@ class _ValueMetric extends StatelessWidget {
 }
 
 class _DetailField {
-  const _DetailField({
-    required this.label,
-    required this.value,
-  });
+  const _DetailField({required this.label, required this.value});
 
   final String label;
   final String value;
@@ -924,7 +991,9 @@ String? _formatCurrency(double? value) {
   }
 
   final hasDecimals = value % 1 != 0;
-  final amount = hasDecimals ? value.toStringAsFixed(2) : value.toStringAsFixed(0);
+  final amount = hasDecimals
+      ? value.toStringAsFixed(2)
+      : value.toStringAsFixed(0);
   return '\$$amount';
 }
 
@@ -978,6 +1047,11 @@ String _buildHeroSummary(CollectibleModel collectible) {
   }
 
   return parts.join(' • ');
+}
+
+bool _isComicCollectible(CollectibleModel collectible) {
+  return collectible.category.trim().toLowerCase() == 'comics' ||
+      (collectible.itemNumber ?? '').trim().isNotEmpty;
 }
 
 List<String> _distinctNonEmptyText(Iterable<String?> values) {

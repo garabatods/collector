@@ -6,5 +6,5 @@ abstract final class AppSpacing {
   static const lg = 24.0;
   static const xl = 32.0;
   static const xxl = 48.0;
-  static const section = 64.0;
+  static const section = 32.0;
 }

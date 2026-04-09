@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/data/session_cache.dart';
 import '../features/collection/data/models/collectible_model.dart';
 import '../features/collection/data/repositories/collectible_photos_repository.dart';
 import '../features/collection/data/repositories/collectibles_repository.dart';
@@ -11,10 +12,7 @@ import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
 
 class CategoryCollectionScreen extends StatefulWidget {
-  const CategoryCollectionScreen({
-    super.key,
-    required this.category,
-  });
+  const CategoryCollectionScreen({super.key, required this.category});
 
   final String category;
 
@@ -23,14 +21,12 @@ class CategoryCollectionScreen extends StatefulWidget {
       _CategoryCollectionScreenState();
 }
 
-enum _CategorySortOption {
-  newest,
-  oldest,
-  titleAscending,
-  titleDescending,
-}
+enum _CategorySortOption { newest, oldest, titleAscending, titleDescending }
 
 class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
+  static const _cachePrefix = 'category:collection:';
+  static const _photoCacheMaxAge = Duration(minutes: 45);
+
   final _collectiblesRepository = CollectiblesRepository();
   final _photosRepository = CollectiblePhotosRepository();
 
@@ -48,35 +44,54 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
     _future = _load();
   }
 
-  Future<_CategoryCollectionData> _load() async {
+  String get _cacheKey =>
+      '$_cachePrefix${widget.category.trim().toLowerCase()}';
+
+  Future<_CategoryCollectionData> _load({bool forceNetwork = false}) async {
+    if (!forceNetwork) {
+      final cached = SessionCache.get<_CategoryCollectionData>(_cacheKey);
+      if (cached != null && !cached.hasExpiredPhotoUrls(_photoCacheMaxAge)) {
+        return cached;
+      }
+    }
+
     final normalizedCategory = widget.category.trim().toLowerCase();
     final collectibles = (await _collectiblesRepository.fetchAll())
-        .where((item) => item.category.trim().toLowerCase() == normalizedCategory)
+        .where(
+          (item) => item.category.trim().toLowerCase() == normalizedCategory,
+        )
         .toList(growable: false);
 
-    final ids =
-        collectibles.map((item) => item.id).whereType<String>().toList(growable: false);
+    final ids = collectibles
+        .map((item) => item.id)
+        .whereType<String>()
+        .toList(growable: false);
     final primaryPhotos = await _photosRepository.fetchPrimaryPhotoMap(ids);
 
     final urls = <String, String>{};
     for (final entry in primaryPhotos.entries) {
-      final signedUrl = await _photosRepository.createSignedPhotoUrl(entry.value);
+      final signedUrl = await _photosRepository.createSignedPhotoUrl(
+        entry.value,
+      );
       if (signedUrl != null) {
         urls[entry.key] = signedUrl;
       }
     }
 
-    return _CategoryCollectionData(
+    final data = _CategoryCollectionData(
       collectibles: collectibles,
       photoUrlsByCollectibleId: urls,
     );
+    SessionCache.set(_cacheKey, data);
+    return data;
   }
 
   Future<void> _reload() async {
     _didChangeCollection = true;
     _favoriteOverrides.clear();
+    SessionCache.remove(_cacheKey);
     setState(() {
-      _future = _load();
+      _future = _load(forceNetwork: true);
     });
     await _future;
   }
@@ -86,18 +101,21 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
   }
 
   List<CollectibleModel> _applyBrowseState(List<CollectibleModel> items) {
-    final filtered = items.map(_applyFavoriteOverride).where((item) {
-      if (_favoritesOnly && !item.isFavorite) {
-        return false;
-      }
-      if (_grailsOnly && !item.isGrail) {
-        return false;
-      }
-      if (_duplicatesOnly && !item.isDuplicate) {
-        return false;
-      }
-      return true;
-    }).toList(growable: false);
+    final filtered = items
+        .map(_applyFavoriteOverride)
+        .where((item) {
+          if (_favoritesOnly && !item.isFavorite) {
+            return false;
+          }
+          if (_grailsOnly && !item.isGrail) {
+            return false;
+          }
+          if (_duplicatesOnly && !item.isDuplicate) {
+            return false;
+          }
+          return true;
+        })
+        .toList(growable: false);
 
     filtered.sort((a, b) {
       switch (_sort) {
@@ -132,19 +150,24 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
     }
 
     setState(() {
+      _didChangeCollection = true;
       _favoriteOverrides[id] = collectible.isFavorite;
     });
   }
 
   int _compareDateDesc(CollectibleModel a, CollectibleModel b) {
-    final aDate = a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final bDate = b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final aDate =
+        a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bDate =
+        b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
     return bDate.compareTo(aDate);
   }
 
   int _compareDateAsc(CollectibleModel a, CollectibleModel b) {
-    final aDate = a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final bDate = b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final aDate =
+        a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bDate =
+        b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
     return aDate.compareTo(bDate);
   }
 
@@ -154,9 +177,7 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        return _CategorySortSheet(
-          selected: _sort,
-        );
+        return _CategorySortSheet(selected: _sort);
       },
     );
 
@@ -180,10 +201,7 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
                 gradient: RadialGradient(
                   center: Alignment.topCenter,
                   radius: 1.2,
-                  colors: [
-                    AppColors.featureGlow,
-                    AppColors.background,
-                  ],
+                  colors: [AppColors.featureGlow, AppColors.background],
                 ),
               ),
             ),
@@ -193,7 +211,8 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
               future: _future,
               builder: (context, snapshot) {
                 final data = snapshot.data;
-                final isRefreshing = snapshot.connectionState != ConnectionState.done;
+                final isRefreshing =
+                    snapshot.connectionState != ConnectionState.done;
 
                 if (snapshot.hasError && data == null) {
                   return _CategoryCollectionErrorState(
@@ -240,12 +259,15 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
                                 const SizedBox(height: AppSpacing.lg),
                                 Text(
                                   widget.category,
-                                  style: Theme.of(context).textTheme.headlineLarge,
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.headlineLarge,
                                 ),
                                 const SizedBox(height: AppSpacing.sm),
                                 Text(
                                   '${visibleItems.length} of ${data.collectibles.length} item${data.collectibles.length == 1 ? '' : 's'}',
-                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(
                                         color: AppColors.onSurfaceVariant,
                                       ),
                                 ),
@@ -297,30 +319,31 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
                               AppSpacing.xxl,
                             ),
                             sliver: SliverGrid(
-                              delegate: SliverChildBuilderDelegate(
-                                (context, index) {
-                                  final collectible = visibleItems[index];
-                                  final id = collectible.id;
-                                  final photoUrl = id == null
-                                      ? null
-                                      : data.photoUrlsByCollectibleId[id];
+                              delegate: SliverChildBuilderDelegate((
+                                context,
+                                index,
+                              ) {
+                                final collectible = visibleItems[index];
+                                final id = collectible.id;
+                                final photoUrl = id == null
+                                    ? null
+                                    : data.photoUrlsByCollectibleId[id];
 
-                                  return CollectibleGridCard(
-                                    collectible: collectible,
-                                    photoUrl: photoUrl,
-                                    onCollectionChanged: _reload,
-                                    onCollectibleUpdated: _handleCollectibleUpdated,
-                                  );
-                                },
-                                childCount: visibleItems.length,
-                              ),
+                                return CollectibleGridCard(
+                                  collectible: collectible,
+                                  photoUrl: photoUrl,
+                                  onCollectionChanged: _reload,
+                                  onCollectibleUpdated:
+                                      _handleCollectibleUpdated,
+                                );
+                              }, childCount: visibleItems.length),
                               gridDelegate:
                                   const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 2,
-                                crossAxisSpacing: AppSpacing.md,
-                                mainAxisSpacing: AppSpacing.md,
-                                childAspectRatio: 0.72,
-                              ),
+                                    crossAxisCount: 2,
+                                    crossAxisSpacing: AppSpacing.md,
+                                    mainAxisSpacing: AppSpacing.md,
+                                    childAspectRatio: 0.72,
+                                  ),
                             ),
                           ),
                       ],
@@ -328,9 +351,7 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
                     if (isRefreshing)
                       const Positioned.fill(
                         child: IgnorePointer(
-                          child: CollectorLoadingOverlay(
-                            backdropOpacity: 0.12,
-                          ),
+                          child: CollectorLoadingOverlay(backdropOpacity: 0.12),
                         ),
                       ),
                   ],
@@ -346,11 +367,11 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
 
 extension on _CategorySortOption {
   String get label => switch (this) {
-        _CategorySortOption.newest => 'Newest',
-        _CategorySortOption.oldest => 'Oldest',
-        _CategorySortOption.titleAscending => 'Title A-Z',
-        _CategorySortOption.titleDescending => 'Title Z-A',
-      };
+    _CategorySortOption.newest => 'Newest',
+    _CategorySortOption.oldest => 'Oldest',
+    _CategorySortOption.titleAscending => 'Title A-Z',
+    _CategorySortOption.titleDescending => 'Title Z-A',
+  };
 }
 
 class _CategoryBrowseControls extends StatelessWidget {
@@ -460,9 +481,10 @@ class _BrowseControlChip extends StatelessWidget {
               Text(
                 label,
                 style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color:
-                          active ? AppColors.primary : AppColors.onSurfaceVariant,
-                    ),
+                  color: active
+                      ? AppColors.primary
+                      : AppColors.onSurfaceVariant,
+                ),
               ),
             ],
           ),
@@ -473,9 +495,7 @@ class _BrowseControlChip extends StatelessWidget {
 }
 
 class _CategorySortSheet extends StatelessWidget {
-  const _CategorySortSheet({
-    required this.selected,
-  });
+  const _CategorySortSheet({required this.selected});
 
   final _CategorySortOption selected;
 
@@ -495,46 +515,48 @@ class _CategorySortSheet extends StatelessWidget {
             AppSpacing.lg,
             AppSpacing.lg,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(999),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.outlineVariant.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Sort Category',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'Choose how this category should be ordered.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              for (final option in _CategorySortOption.values)
-                ListTile(
-                  onTap: () => Navigator.of(context).pop(option),
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(option.label),
-                  trailing: option == selected
-                      ? const Icon(
-                          Icons.check_rounded,
-                          color: AppColors.primary,
-                        )
-                      : null,
+                const SizedBox(height: AppSpacing.lg),
+                Text(
+                  'Sort Category',
+                  style: Theme.of(context).textTheme.headlineSmall,
                 ),
-            ],
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  'Choose how this category should be ordered.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                for (final option in _CategorySortOption.values)
+                  ListTile(
+                    onTap: () => Navigator.of(context).pop(option),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(option.label),
+                    trailing: option == selected
+                        ? const Icon(
+                            Icons.check_rounded,
+                            color: AppColors.primary,
+                          )
+                        : null,
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -543,9 +565,7 @@ class _CategorySortSheet extends StatelessWidget {
 }
 
 class _EmptyFilterResultsPanel extends StatelessWidget {
-  const _EmptyFilterResultsPanel({
-    required this.onClearFilters,
-  });
+  const _EmptyFilterResultsPanel({required this.onClearFilters});
 
   final VoidCallback onClearFilters;
 
@@ -564,9 +584,9 @@ class _EmptyFilterResultsPanel extends StatelessWidget {
           const SizedBox(height: AppSpacing.sm),
           Text(
             'Try clearing one or more filters to see the full category again.',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: AppSpacing.md),
           CollectorButton(
@@ -616,8 +636,8 @@ class _CategoryCollectionEmptyState extends StatelessWidget {
               Text(
                 'Once you add collectibles in this category, they will show up here.',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
+                  color: AppColors.onSurfaceVariant,
+                ),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -665,8 +685,8 @@ class _CategoryCollectionErrorState extends StatelessWidget {
               Text(
                 'Give it another try and we will pull the latest items in this category.',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
+                  color: AppColors.onSurfaceVariant,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.lg),
@@ -679,10 +699,7 @@ class _CategoryCollectionErrorState extends StatelessWidget {
                     variant: CollectorButtonVariant.secondary,
                   ),
                   const SizedBox(width: AppSpacing.md),
-                  CollectorButton(
-                    label: 'Retry',
-                    onPressed: () => onRetry(),
-                  ),
+                  CollectorButton(label: 'Retry', onPressed: () => onRetry()),
                 ],
               ),
             ],
@@ -694,11 +711,17 @@ class _CategoryCollectionErrorState extends StatelessWidget {
 }
 
 class _CategoryCollectionData {
-  const _CategoryCollectionData({
+  _CategoryCollectionData({
     required this.collectibles,
     required this.photoUrlsByCollectibleId,
-  });
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
 
   final List<CollectibleModel> collectibles;
   final Map<String, String> photoUrlsByCollectibleId;
+  final DateTime createdAt;
+
+  bool hasExpiredPhotoUrls(Duration maxAge) {
+    return DateTime.now().difference(createdAt) > maxAge;
+  }
 }
