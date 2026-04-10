@@ -1,21 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../core/data/archive_repository.dart';
+import '../core/data/archive_types.dart';
 import '../features/collection/data/models/collectible_model.dart';
-import '../features/collection/data/repositories/collectible_photos_repository.dart';
-import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../features/profile/data/models/profile_model.dart';
 import '../features/profile/data/repositories/profile_avatar_repository.dart';
 import '../features/profile/data/repositories/profile_repository.dart';
-import '../features/wishlist/data/repositories/wishlist_items_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/archive_bootstrap_gate.dart';
+import '../widgets/archive_photo_view.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_chip.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/collector_text_field.dart';
+import '../widgets/resolved_avatar_image.dart';
 import 'collectible_detail_screen.dart';
 import 'collection_search_screen.dart';
 
@@ -44,147 +45,40 @@ class CollectionProfileScreen extends StatefulWidget {
 }
 
 class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
+  final _archiveRepository = ArchiveRepository.instance;
   final _profileRepository = ProfileRepository();
   final _profileAvatarRepository = ProfileAvatarRepository();
-  final _collectiblesRepository = CollectiblesRepository();
-  final _wishlistRepository = WishlistItemsRepository();
-  final _photosRepository = CollectiblePhotosRepository();
   final _imagePicker = ImagePicker();
 
-  late Future<_ProfileScreenData> _future;
   var _isSigningOut = false;
   var _isUploadingAvatar = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _future = _load();
-  }
 
   @override
   void didUpdateWidget(covariant CollectionProfileScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.refreshSeed != widget.refreshSeed) {
-      _future = _load();
+      _archiveRepository.syncIfNeeded(force: true);
     }
   }
 
-  Future<_ProfileScreenData> _load() async {
-    final user = Supabase.instance.client.auth.currentUser;
-    final profile = await _profileRepository.fetchCurrentProfile();
-    final collectibles = await _collectiblesRepository.fetchAll();
-    final wishlistItems = await _wishlistRepository.fetchAll();
-
-    final categoryCounts = <String, int>{};
-    for (final item in collectibles) {
-      final category = item.category.trim();
-      if (category.isEmpty) continue;
-      categoryCounts.update(category, (value) => value + 1, ifAbsent: () => 1);
-    }
-
-    final sortedCollectibles = _sortNewestFirst(collectibles);
-    final favoriteCategory = _pickFavoriteCategory(categoryCounts);
-    final latestItem = sortedCollectibles.isEmpty ? null : sortedCollectibles.first;
-    final featuredItem = _pickFeaturedItem(
-      sortedCollectibles,
-      topCategory: favoriteCategory,
-    );
-    final featuredPhotoUrl = await _loadFeaturedPhotoUrl(featuredItem);
-    final avatarImageUrl = await _profileAvatarRepository.resolveAvatarUrl(
-      profile?.avatarUrl,
-    );
-
+  _ProfileScreenData _toProfileScreenData(ArchiveProfileSummary summary) {
     return _ProfileScreenData(
-      profile: profile,
-      avatarImageUrl: avatarImageUrl,
-      email: user?.email,
-      totalItems: collectibles.length,
-      categoryCount: categoryCounts.length,
-      favoriteCount: collectibles.where((item) => item.isFavorite).length,
-      wishlistCount: wishlistItems.length,
-      latestItem: latestItem,
-      featuredItem: featuredItem,
-      featuredPhotoUrl: featuredPhotoUrl,
-      favoriteCategory: favoriteCategory,
+      profile: summary.profile,
+      avatarImageUrl: summary.profile?.avatarUrl?.trim(),
+      email: summary.email,
+      totalItems: summary.totalItems,
+      categoryCount: summary.categoryCount,
+      favoriteCount: summary.favoriteCount,
+      wishlistCount: summary.wishlistCount,
+      latestItem: summary.latestItem,
+      featuredItem: summary.featuredItem,
+      featuredPhotoRef: summary.featuredPhotoRef,
+      favoriteCategory: summary.favoriteCategory,
     );
-  }
-
-  List<CollectibleModel> _sortNewestFirst(List<CollectibleModel> items) {
-    final sorted = [...items];
-    sorted.sort((a, b) {
-      final aDate = a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-      final bDate = b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-      return bDate.compareTo(aDate);
-    });
-    return sorted;
-  }
-
-  CollectibleModel? _pickFeaturedItem(
-    List<CollectibleModel> items, {
-    String? topCategory,
-  }) {
-    if (items.isEmpty) {
-      return null;
-    }
-
-    if (topCategory != null && topCategory.trim().isNotEmpty) {
-      final normalizedTopCategory = topCategory.trim().toLowerCase();
-      final topCategoryItems = items
-          .where((item) => item.category.trim().toLowerCase() == normalizedTopCategory)
-          .toList(growable: false);
-
-      for (final item in topCategoryItems) {
-        if (item.isFavorite) {
-          return item;
-        }
-      }
-
-      if (topCategoryItems.isNotEmpty) {
-        return topCategoryItems.first;
-      }
-    }
-
-    for (final item in items) {
-      if (item.isFavorite) {
-        return item;
-      }
-    }
-
-    return items.first;
-  }
-
-  Future<String?> _loadFeaturedPhotoUrl(CollectibleModel? collectible) async {
-    final id = collectible?.id;
-    if (id == null) {
-      return null;
-    }
-
-    final primaryPhotoMap = await _photosRepository.fetchPrimaryPhotoMap([id]);
-    final storagePath = primaryPhotoMap[id];
-    if (storagePath == null) {
-      return null;
-    }
-    return _photosRepository.createSignedPhotoUrl(storagePath);
-  }
-
-  String? _pickFavoriteCategory(Map<String, int> categoryCounts) {
-    if (categoryCounts.isEmpty) {
-      return null;
-    }
-
-    final entries = categoryCounts.entries.toList()
-      ..sort((a, b) {
-        final byCount = b.value.compareTo(a.value);
-        return byCount == 0 ? a.key.compareTo(b.key) : byCount;
-      });
-    return entries.first.key;
   }
 
   Future<void> _reload() async {
-    setState(() {
-      _future = _load();
-    });
-    await _future;
+    await _archiveRepository.syncIfNeeded(force: true);
   }
 
   Future<void> _openFeaturedItem(_ProfileScreenData data) async {
@@ -195,7 +89,7 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
       MaterialPageRoute<bool>(
         builder: (_) => CollectibleDetailScreen(
           collectible: featuredItem,
-          photoUrl: data.featuredPhotoUrl,
+          photoRef: data.featuredPhotoRef,
         ),
       ),
     );
@@ -400,96 +294,97 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<_ProfileScreenData>(
-      future: _future,
-      builder: (context, snapshot) {
-        final data = snapshot.data;
-        final isRefreshing = snapshot.connectionState != ConnectionState.done;
+    return ArchiveBootstrapGate(
+      child: StreamBuilder<ArchiveProfileSummary>(
+        stream: _archiveRepository.watchProfileSummary(),
+        builder: (context, snapshot) {
+          final data = snapshot.data == null
+              ? null
+              : _toProfileScreenData(snapshot.data!);
 
-        if (snapshot.hasError && data == null) {
-          return _ProfileErrorState(onRetry: _reload);
-        }
+          if (snapshot.hasError && data == null) {
+            return _ProfileErrorState(onRetry: _reload);
+          }
 
-        if (data == null) {
-          return const CollectorLoadingOverlay();
-        }
+          if (data == null) {
+            return const CollectorLoadingOverlay();
+          }
 
-        return Stack(
-          children: [
-            CustomScrollView(
-              slivers: [
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.md,
-                      AppSpacing.md,
-                      AppSpacing.md,
-                      140,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _ProfileHeader(
-                          data: data,
-                          onEditProfile: () => _openEditProfileSheet(data.profile),
-                          onAvatarTap: () => _openAvatarPhotoSheet(data.profile),
-                          isUploadingAvatar: _isUploadingAvatar,
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        _CollectorSummary(data: data),
-                        const SizedBox(height: AppSpacing.lg),
-                        const _ProfileSectionTitle(
-                          title: 'Collector Highlight',
-                          subtitle: 'A quick read on what defines your shelf right now.',
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        _CollectorHighlightPanel(
-                          data: data,
-                          onOpenFeaturedItem: () => _openFeaturedItem(data),
-                          onAddItem: widget.onAddItem,
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
-                        const _ProfileSectionTitle(
-                          title: 'Quick Actions',
-                          subtitle: 'Jump to the parts of the app collectors reach for most.',
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        _QuickActionsGrid(
-                          data: data,
-                          onOpenFavorites: _openFavorites,
-                          onOpenLibrary: widget.onOpenLibrary,
-                          onOpenWishlist: widget.onOpenWishlist,
-                          onOpenRecentlyAdded: _openRecentlyAdded,
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
-                        const _ProfileSectionTitle(
-                          title: 'Account',
-                          subtitle: 'Keep the essentials nearby without crowding the top of the screen.',
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        _AccountSection(
-                          data: data,
-                          isSigningOut: _isSigningOut,
-                          onEditProfile: () => _openEditProfileSheet(data.profile),
-                          onSignOut: _confirmSignOut,
-                        ),
-                      ],
+          return Stack(
+            children: [
+              CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.md,
+                        AppSpacing.md,
+                        AppSpacing.md,
+                        140,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _ProfileHeader(
+                            data: data,
+                            onEditProfile: () =>
+                                _openEditProfileSheet(data.profile),
+                            onAvatarTap: () =>
+                                _openAvatarPhotoSheet(data.profile),
+                            isUploadingAvatar: _isUploadingAvatar,
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                          _CollectorSummary(data: data),
+                          const SizedBox(height: AppSpacing.lg),
+                          const _ProfileSectionTitle(
+                            title: 'Collector Highlight',
+                            subtitle:
+                                'A quick read on what defines your shelf right now.',
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          _CollectorHighlightPanel(
+                            data: data,
+                            onOpenFeaturedItem: () => _openFeaturedItem(data),
+                            onAddItem: widget.onAddItem,
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          const _ProfileSectionTitle(
+                            title: 'Quick Actions',
+                            subtitle:
+                                'Jump to the parts of the app collectors reach for most.',
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          _QuickActionsGrid(
+                            data: data,
+                            onOpenFavorites: _openFavorites,
+                            onOpenLibrary: widget.onOpenLibrary,
+                            onOpenWishlist: widget.onOpenWishlist,
+                            onOpenRecentlyAdded: _openRecentlyAdded,
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          const _ProfileSectionTitle(
+                            title: 'Account',
+                            subtitle:
+                                'Keep the essentials nearby without crowding the top of the screen.',
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          _AccountSection(
+                            data: data,
+                            isSigningOut: _isSigningOut,
+                            onEditProfile: () =>
+                                _openEditProfileSheet(data.profile),
+                            onSignOut: _confirmSignOut,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            if (isRefreshing)
-              const Positioned.fill(
-                child: IgnorePointer(
-                  child: CollectorLoadingOverlay(
-                    backdropOpacity: 0.12,
-                  ),
-                ),
+                ],
               ),
-          ],
-        );
-      },
+            ],
+          );
+        },
+      ),
     );
   }
 }
@@ -719,38 +614,37 @@ class _CollectorHighlightPanel extends StatelessWidget {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        data.featuredPhotoUrl == null
-                            ? DecoratedBox(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: [
-                                      AppColors.primary.withValues(alpha: 0.22),
-                                      AppColors.surfaceContainerHighest,
-                                      AppColors.surfaceContainerLow,
-                                    ],
-                                  ),
-                                ),
-                                child: const Center(
-                                  child: Icon(
-                                    Icons.collections_bookmark_outlined,
-                                    size: 42,
-                                    color: AppColors.onSurfaceVariant,
-                                  ),
-                                ),
-                              )
-                            : Image.network(
-                                data.featuredPhotoUrl!,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => const Center(
-                                  child: Icon(
-                                    Icons.broken_image_outlined,
-                                    size: 36,
-                                    color: AppColors.onSurfaceVariant,
-                                  ),
-                                ),
+                        ArchivePhotoView(
+                          photoRef: data.featuredPhotoRef,
+                          fit: BoxFit.cover,
+                          placeholder: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  AppColors.primary.withValues(alpha: 0.22),
+                                  AppColors.surfaceContainerHighest,
+                                  AppColors.surfaceContainerLow,
+                                ],
                               ),
+                            ),
+                            child: const Center(
+                              child: Icon(
+                                Icons.collections_bookmark_outlined,
+                                size: 42,
+                                color: AppColors.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                          error: const Center(
+                            child: Icon(
+                              Icons.broken_image_outlined,
+                              size: 36,
+                              color: AppColors.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
                         const DecoratedBox(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
@@ -1092,13 +986,12 @@ class _ProfileAvatar extends StatelessWidget {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        avatarUrl?.trim().isNotEmpty == true
-                            ? Image.network(
-                                avatarUrl!,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => _AvatarFallback(initials: initials),
-                              )
-                            : _AvatarFallback(initials: initials),
+                        ResolvedAvatarImage(
+                          avatarSource: avatarUrl,
+                          fit: BoxFit.cover,
+                          fallback: _AvatarFallback(initials: initials),
+                          error: _AvatarFallback(initials: initials),
+                        ),
                         if (isUploading)
                           ColoredBox(
                             color: AppColors.background.withValues(alpha: 0.56),
@@ -1742,7 +1635,7 @@ class _ProfileScreenData {
     required this.wishlistCount,
     required this.latestItem,
     required this.featuredItem,
-    required this.featuredPhotoUrl,
+    required this.featuredPhotoRef,
     required this.favoriteCategory,
   });
 
@@ -1755,7 +1648,7 @@ class _ProfileScreenData {
   final int wishlistCount;
   final CollectibleModel? latestItem;
   final CollectibleModel? featuredItem;
-  final String? featuredPhotoUrl;
+  final ArchivePhotoRef? featuredPhotoRef;
   final String? favoriteCategory;
 
   String get displayName {

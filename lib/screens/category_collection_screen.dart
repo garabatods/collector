@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 
-import '../core/data/session_cache.dart';
+import '../core/data/archive_repository.dart';
+import '../core/data/archive_types.dart';
 import '../features/collection/data/models/collectible_model.dart';
-import '../features/collection/data/repositories/collectible_photos_repository.dart';
-import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_loading_overlay.dart';
@@ -24,76 +24,17 @@ class CategoryCollectionScreen extends StatefulWidget {
 enum _CategorySortOption { newest, oldest, titleAscending, titleDescending }
 
 class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
-  static const _cachePrefix = 'category:collection:';
-  static const _photoCacheMaxAge = Duration(minutes: 45);
+  final _archiveRepository = ArchiveRepository.instance;
 
-  final _collectiblesRepository = CollectiblesRepository();
-  final _photosRepository = CollectiblePhotosRepository();
-
-  late Future<_CategoryCollectionData> _future;
   var _didChangeCollection = false;
   var _favoritesOnly = false;
   var _grailsOnly = false;
   var _duplicatesOnly = false;
   var _sort = _CategorySortOption.newest;
-  final Map<String, bool> _favoriteOverrides = <String, bool>{};
-
-  @override
-  void initState() {
-    super.initState();
-    _future = _load();
-  }
-
-  String get _cacheKey =>
-      '$_cachePrefix${widget.category.trim().toLowerCase()}';
-
-  Future<_CategoryCollectionData> _load({bool forceNetwork = false}) async {
-    if (!forceNetwork) {
-      final cached = SessionCache.get<_CategoryCollectionData>(_cacheKey);
-      if (cached != null && !cached.hasExpiredPhotoUrls(_photoCacheMaxAge)) {
-        return cached;
-      }
-    }
-
-    final normalizedCategory = widget.category.trim().toLowerCase();
-    final collectibles = (await _collectiblesRepository.fetchAll())
-        .where(
-          (item) => item.category.trim().toLowerCase() == normalizedCategory,
-        )
-        .toList(growable: false);
-
-    final ids = collectibles
-        .map((item) => item.id)
-        .whereType<String>()
-        .toList(growable: false);
-    final primaryPhotos = await _photosRepository.fetchPrimaryPhotoMap(ids);
-
-    final urls = <String, String>{};
-    for (final entry in primaryPhotos.entries) {
-      final signedUrl = await _photosRepository.createSignedPhotoUrl(
-        entry.value,
-      );
-      if (signedUrl != null) {
-        urls[entry.key] = signedUrl;
-      }
-    }
-
-    final data = _CategoryCollectionData(
-      collectibles: collectibles,
-      photoUrlsByCollectibleId: urls,
-    );
-    SessionCache.set(_cacheKey, data);
-    return data;
-  }
 
   Future<void> _reload() async {
     _didChangeCollection = true;
-    _favoriteOverrides.clear();
-    SessionCache.remove(_cacheKey);
-    setState(() {
-      _future = _load(forceNetwork: true);
-    });
-    await _future;
+    await _archiveRepository.syncIfNeeded(force: true);
   }
 
   void _handleBack() {
@@ -101,9 +42,7 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
   }
 
   List<CollectibleModel> _applyBrowseState(List<CollectibleModel> items) {
-    final filtered = items
-        .map(_applyFavoriteOverride)
-        .where((item) {
+    final filtered = items.where((item) {
           if (_favoritesOnly && !item.isFavorite) {
             return false;
           }
@@ -114,8 +53,7 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
             return false;
           }
           return true;
-        })
-        .toList(growable: false);
+        }).toList(growable: false);
 
     filtered.sort((a, b) {
       switch (_sort) {
@@ -131,28 +69,6 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
     });
 
     return filtered;
-  }
-
-  CollectibleModel _applyFavoriteOverride(CollectibleModel item) {
-    final id = item.id;
-    if (id == null) {
-      return item;
-    }
-
-    final isFavorite = _favoriteOverrides[id];
-    return isFavorite == null ? item : item.copyWith(isFavorite: isFavorite);
-  }
-
-  void _handleCollectibleUpdated(CollectibleModel collectible) {
-    final id = collectible.id;
-    if (id == null) {
-      return;
-    }
-
-    setState(() {
-      _didChangeCollection = true;
-      _favoriteOverrides[id] = collectible.isFavorite;
-    });
   }
 
   int _compareDateDesc(CollectibleModel a, CollectibleModel b) {
@@ -207,156 +123,142 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
             ),
           ),
           SafeArea(
-            child: FutureBuilder<_CategoryCollectionData>(
-              future: _future,
-              builder: (context, snapshot) {
-                final data = snapshot.data;
-                final isRefreshing =
-                    snapshot.connectionState != ConnectionState.done;
+            child: ArchiveBootstrapGate(
+              child: StreamBuilder<ArchiveCategoryCollection>(
+                stream:
+                    _archiveRepository.watchCategoryCollection(widget.category),
+                builder: (context, snapshot) {
+                  final data = snapshot.data;
 
-                if (snapshot.hasError && data == null) {
-                  return _CategoryCollectionErrorState(
-                    category: widget.category,
-                    onRetry: _reload,
-                    onBack: _handleBack,
-                  );
-                }
+                  if (snapshot.hasError && data == null) {
+                    return _CategoryCollectionErrorState(
+                      category: widget.category,
+                      onRetry: _reload,
+                      onBack: _handleBack,
+                    );
+                  }
 
-                if (data == null) {
-                  return const CollectorLoadingOverlay();
-                }
+                  if (data == null) {
+                    return const CollectorLoadingOverlay();
+                  }
 
-                if (data.collectibles.isEmpty) {
-                  return _CategoryCollectionEmptyState(
-                    category: widget.category,
-                    onBack: _handleBack,
-                  );
-                }
+                  if (data.collectibles.isEmpty) {
+                    return _CategoryCollectionEmptyState(
+                      category: widget.category,
+                      onBack: _handleBack,
+                    );
+                  }
 
-                final visibleItems = _applyBrowseState(data.collectibles);
+                  final visibleItems = _applyBrowseState(data.collectibles);
 
-                return Stack(
-                  children: [
-                    CustomScrollView(
-                      slivers: [
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(
-                              AppSpacing.md,
-                              AppSpacing.md,
-                              AppSpacing.md,
-                              AppSpacing.lg,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                CollectorButton(
-                                  label: 'Back',
-                                  onPressed: _handleBack,
-                                  variant: CollectorButtonVariant.icon,
-                                  icon: Icons.arrow_back_rounded,
-                                ),
+                  return CustomScrollView(
+                    slivers: [
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            AppSpacing.md,
+                            AppSpacing.md,
+                            AppSpacing.md,
+                            AppSpacing.lg,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              CollectorButton(
+                                label: 'Back',
+                                onPressed: _handleBack,
+                                variant: CollectorButtonVariant.icon,
+                                icon: Icons.arrow_back_rounded,
+                              ),
+                              const SizedBox(height: AppSpacing.lg),
+                              Text(
+                                widget.category,
+                                style:
+                                    Theme.of(context).textTheme.headlineLarge,
+                              ),
+                              const SizedBox(height: AppSpacing.sm),
+                              Text(
+                                '${visibleItems.length} of ${data.collectibles.length} item${data.collectibles.length == 1 ? '' : 's'}',
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      color: AppColors.onSurfaceVariant,
+                                    ),
+                              ),
+                              const SizedBox(height: AppSpacing.lg),
+                              _CategoryBrowseControls(
+                                sortLabel: _sort.label,
+                                favoritesOnly: _favoritesOnly,
+                                grailsOnly: _grailsOnly,
+                                duplicatesOnly: _duplicatesOnly,
+                                onSortTap: _openSortSheet,
+                                onFavoritesTap: () {
+                                  setState(() {
+                                    _favoritesOnly = !_favoritesOnly;
+                                  });
+                                },
+                                onGrailsTap: () {
+                                  setState(() {
+                                    _grailsOnly = !_grailsOnly;
+                                  });
+                                },
+                                onDuplicatesTap: () {
+                                  setState(() {
+                                    _duplicatesOnly = !_duplicatesOnly;
+                                  });
+                                },
+                              ),
+                              if (visibleItems.isEmpty) ...[
                                 const SizedBox(height: AppSpacing.lg),
-                                Text(
-                                  widget.category,
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.headlineLarge,
-                                ),
-                                const SizedBox(height: AppSpacing.sm),
-                                Text(
-                                  '${visibleItems.length} of ${data.collectibles.length} item${data.collectibles.length == 1 ? '' : 's'}',
-                                  style: Theme.of(context).textTheme.bodyMedium
-                                      ?.copyWith(
-                                        color: AppColors.onSurfaceVariant,
-                                      ),
-                                ),
-                                const SizedBox(height: AppSpacing.lg),
-                                _CategoryBrowseControls(
-                                  sortLabel: _sort.label,
-                                  favoritesOnly: _favoritesOnly,
-                                  grailsOnly: _grailsOnly,
-                                  duplicatesOnly: _duplicatesOnly,
-                                  onSortTap: _openSortSheet,
-                                  onFavoritesTap: () {
+                                _EmptyFilterResultsPanel(
+                                  onClearFilters: () {
                                     setState(() {
-                                      _favoritesOnly = !_favoritesOnly;
-                                    });
-                                  },
-                                  onGrailsTap: () {
-                                    setState(() {
-                                      _grailsOnly = !_grailsOnly;
-                                    });
-                                  },
-                                  onDuplicatesTap: () {
-                                    setState(() {
-                                      _duplicatesOnly = !_duplicatesOnly;
+                                      _favoritesOnly = false;
+                                      _grailsOnly = false;
+                                      _duplicatesOnly = false;
                                     });
                                   },
                                 ),
-                                if (visibleItems.isEmpty) ...[
-                                  const SizedBox(height: AppSpacing.lg),
-                                  _EmptyFilterResultsPanel(
-                                    onClearFilters: () {
-                                      setState(() {
-                                        _favoritesOnly = false;
-                                        _grailsOnly = false;
-                                        _duplicatesOnly = false;
-                                      });
-                                    },
-                                  ),
-                                ],
                               ],
-                            ),
+                            ],
                           ),
-                        ),
-                        if (visibleItems.isNotEmpty)
-                          SliverPadding(
-                            padding: const EdgeInsets.fromLTRB(
-                              AppSpacing.md,
-                              0,
-                              AppSpacing.md,
-                              AppSpacing.xxl,
-                            ),
-                            sliver: SliverGrid(
-                              delegate: SliverChildBuilderDelegate((
-                                context,
-                                index,
-                              ) {
-                                final collectible = visibleItems[index];
-                                final id = collectible.id;
-                                final photoUrl = id == null
-                                    ? null
-                                    : data.photoUrlsByCollectibleId[id];
-
-                                return CollectibleGridCard(
-                                  collectible: collectible,
-                                  photoUrl: photoUrl,
-                                  onCollectionChanged: _reload,
-                                  onCollectibleUpdated:
-                                      _handleCollectibleUpdated,
-                                );
-                              }, childCount: visibleItems.length),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 2,
-                                    crossAxisSpacing: AppSpacing.md,
-                                    mainAxisSpacing: AppSpacing.md,
-                                    childAspectRatio: 0.72,
-                                  ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    if (isRefreshing)
-                      const Positioned.fill(
-                        child: IgnorePointer(
-                          child: CollectorLoadingOverlay(backdropOpacity: 0.12),
                         ),
                       ),
-                  ],
-                );
-              },
+                      if (visibleItems.isNotEmpty)
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(
+                            AppSpacing.md,
+                            0,
+                            AppSpacing.md,
+                            AppSpacing.xxl,
+                          ),
+                          sliver: SliverGrid(
+                            delegate:
+                                SliverChildBuilderDelegate((context, index) {
+                              final collectible = visibleItems[index];
+                              final id = collectible.id;
+                              final photoRef = id == null
+                                  ? null
+                                  : data.photoRefsByCollectibleId[id];
+
+                              return CollectibleGridCard(
+                                collectible: collectible,
+                                photoRef: photoRef,
+                                onCollectionChanged: _reload,
+                              );
+                            }, childCount: visibleItems.length),
+                            gridDelegate:
+                                const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 2,
+                                  crossAxisSpacing: AppSpacing.md,
+                                  mainAxisSpacing: AppSpacing.md,
+                                  childAspectRatio: 0.72,
+                                ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ],
@@ -707,21 +609,5 @@ class _CategoryCollectionErrorState extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _CategoryCollectionData {
-  _CategoryCollectionData({
-    required this.collectibles,
-    required this.photoUrlsByCollectibleId,
-    DateTime? createdAt,
-  }) : createdAt = createdAt ?? DateTime.now();
-
-  final List<CollectibleModel> collectibles;
-  final Map<String, String> photoUrlsByCollectibleId;
-  final DateTime createdAt;
-
-  bool hasExpiredPhotoUrls(Duration maxAge) {
-    return DateTime.now().difference(createdAt) > maxAge;
   }
 }

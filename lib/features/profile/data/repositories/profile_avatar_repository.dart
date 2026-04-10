@@ -15,6 +15,7 @@ class ProfileAvatarRepository extends SupabaseRepository {
     required String originalFileName,
     String? previousStoragePath,
   }) async {
+    await ensureOnlineForWrite();
     final storagePath = _buildAvatarStoragePath(
       userId: currentUserId,
       originalFileName: originalFileName,

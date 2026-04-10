@@ -104,7 +104,6 @@ class _ManualAddCollectibleScreenState
   bool _useCustomCategory = false;
   bool _useCustomBrand = false;
   bool _detailsExpanded = false;
-  bool _organizationExpanded = false;
   String? _selectedCondition;
   String? _selectedBoxStatus;
   int _quantity = 1;
@@ -220,8 +219,6 @@ class _ManualAddCollectibleScreenState
     }
 
     _detailsExpanded = _hasVisibleMetadata();
-    _organizationExpanded =
-        _selectedTagIds.isNotEmpty || _newTagNames.isNotEmpty;
     _loadSuggestions();
   }
 
@@ -284,8 +281,6 @@ class _ManualAddCollectibleScreenState
     final autofillResult = widget.autofillResult;
     if (autofillResult == null) {
       _detailsExpanded = _hasVisibleMetadata();
-      _organizationExpanded =
-          _selectedTagIds.isNotEmpty || _newTagNames.isNotEmpty;
       return;
     }
 
@@ -303,8 +298,6 @@ class _ManualAddCollectibleScreenState
     _applyTagSuggestions(autofillResult);
 
     _detailsExpanded = _hasVisibleMetadata();
-    _organizationExpanded =
-        _selectedTagIds.isNotEmpty || _newTagNames.isNotEmpty;
   }
 
   Future<void> _loadSuggestions() async {
@@ -467,12 +460,6 @@ class _ManualAddCollectibleScreenState
     });
   }
 
-  void _toggleOrganizationExpanded() {
-    setState(() {
-      _organizationExpanded = !_organizationExpanded;
-    });
-  }
-
   void _toggleCollectorState(CollectorState collectorState) {
     setState(() {
       switch (collectorState) {
@@ -486,18 +473,6 @@ class _ManualAddCollectibleScreenState
           _isDuplicate = !_isDuplicate;
           break;
       }
-    });
-  }
-
-  void _removeSelectedTagId(String tagId) {
-    setState(() {
-      _selectedTagIds.remove(tagId);
-    });
-  }
-
-  void _removeNewTag(String tagName) {
-    setState(() {
-      _newTagNames.remove(tagName);
     });
   }
 
@@ -628,8 +603,8 @@ class _ManualAddCollectibleScreenState
     _selectBrand(selected);
   }
 
-  Future<void> _openSavedTagsPickerSheet() async {
-    final selectedIds = await showModalBottomSheet<Set<String>>(
+  Future<void> _openTagsSelectorSheet() async {
+    final result = await showModalBottomSheet<_TagPickerSheetResult>(
       context: context,
       useSafeArea: true,
       isScrollControlled: true,
@@ -637,18 +612,27 @@ class _ManualAddCollectibleScreenState
       builder: (context) => _TagSearchBottomSheet(
         availableTags: _availableTags,
         selectedTagIds: _selectedTagIds,
+        newTagNames: _newTagNames,
       ),
     );
 
-    if (!mounted || selectedIds == null) {
+    if (!mounted || result == null) {
       return;
     }
 
     setState(() {
       _selectedTagIds
         ..clear()
-        ..addAll(selectedIds);
+        ..addAll(result.selectedTagIds);
+      _newTagNames
+        ..clear()
+        ..addAll(result.newTagNames);
     });
+
+    if (result.createRequested) {
+      await _openCreateTagSheet();
+      return;
+    }
   }
 
   void _adjustQuantity(int delta) {
@@ -718,6 +702,34 @@ class _ManualAddCollectibleScreenState
         (tag) => (tag.id ?? '').isNotEmpty && _selectedTagIds.contains(tag.id),
       )
       .toList(growable: false);
+
+  bool get _hasSelectedTags =>
+      _selectedExistingTags.isNotEmpty || _newTagNames.isNotEmpty;
+
+  String get _resolvedTagsDisplayValue {
+    final count = _selectedExistingTags.length + _newTagNames.length;
+    if (count == 0) {
+      return 'Optional for now';
+    }
+    if (count == 1) {
+      return _selectedExistingTags.isNotEmpty
+          ? _selectedExistingTags.first.name
+          : _newTagNames.first;
+    }
+    return '$count tags selected';
+  }
+
+  String get _tagsFieldHelperText {
+    if (!_hasSelectedTags) {
+      return 'Optional for browsing later';
+    }
+    final names = [
+      ..._selectedExistingTags.map((tag) => tag.name),
+      ..._newTagNames,
+    ];
+    return names.take(2).join(', ') +
+        (names.length > 2 ? ' +${names.length - 2}' : '');
+  }
 
   String? _nullableText(TextEditingController controller) {
     final value = controller.text.trim();
@@ -803,6 +815,9 @@ class _ManualAddCollectibleScreenState
         _characterController.text.trim().isNotEmpty ||
         _releaseYearController.text.trim().isNotEmpty ||
         _issueNumberController.text.trim().isNotEmpty ||
+        _isFavorite ||
+        _isGrail ||
+        _isDuplicate ||
         _selectedCondition != null ||
         _selectedBoxStatus != null;
   }
@@ -1158,6 +1173,17 @@ class _ManualAddCollectibleScreenState
                               const SizedBox(height: AppSpacing.md),
                               const _BasicsDivider(),
                               const SizedBox(height: AppSpacing.md),
+                              _SelectionField(
+                                label: 'Tags',
+                                value: _resolvedTagsDisplayValue,
+                                helperText: _tagsFieldHelperText,
+                                actionLabel: 'Browse',
+                                onTap: _openTagsSelectorSheet,
+                                isPlaceholder: !_hasSelectedTags,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              const _BasicsDivider(),
+                              const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
                                 label: 'Release year',
                                 hintText: '1985',
@@ -1189,6 +1215,17 @@ class _ManualAddCollectibleScreenState
                                 isPlaceholder: (_resolvedBrand() ?? '')
                                     .trim()
                                     .isEmpty,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              const _BasicsDivider(),
+                              const SizedBox(height: AppSpacing.md),
+                              _SelectionField(
+                                label: 'Tags',
+                                value: _resolvedTagsDisplayValue,
+                                helperText: _tagsFieldHelperText,
+                                actionLabel: 'Browse',
+                                onTap: _openTagsSelectorSheet,
+                                isPlaceholder: !_hasSelectedTags,
                               ),
                             ],
                           ],
@@ -1252,6 +1289,24 @@ class _ManualAddCollectibleScreenState
                                 controller: _descriptionController,
                               ),
                             ],
+                            const SizedBox(height: AppSpacing.lg),
+                            Text(
+                              'COLLECTOR STATUS',
+                              style: Theme.of(context).textTheme.labelSmall,
+                            ),
+                            const SizedBox(height: AppSpacing.xxs),
+                            Text(
+                              'Mark how it fits your shelf.',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: AppColors.onSurfaceVariant),
+                            ),
+                            const SizedBox(height: AppSpacing.sm),
+                            _CollectorStatusPanel(
+                              isFavorite: _isFavorite,
+                              isGrail: _isGrail,
+                              isDuplicate: _isDuplicate,
+                              onToggle: _toggleCollectorState,
+                            ),
                             const SizedBox(height: AppSpacing.lg),
                             Text(
                               'CONDITION',
@@ -1343,37 +1398,6 @@ class _ManualAddCollectibleScreenState
                         ),
                       ),
                       const SizedBox(height: _formSectionSpacing),
-                      _SectionPanel(
-                        eyebrow: 'Collector Status',
-                        title: 'Mark how it fits your shelf',
-                        description:
-                            'Use a few structured collector states instead of turning them into tags.',
-                        child: _CollectorStatusPanel(
-                          isFavorite: _isFavorite,
-                          isGrail: _isGrail,
-                          isDuplicate: _isDuplicate,
-                          onToggle: _toggleCollectorState,
-                        ),
-                      ),
-                      const SizedBox(height: _formSectionSpacing),
-                      _ExpandableSectionPanel(
-                        eyebrow: 'Organization',
-                        title: 'Tags and grouping',
-                        description:
-                            'Helpful for browsing later, but optional for the first save.',
-                        expanded: _organizationExpanded,
-                        onToggle: _toggleOrganizationExpanded,
-                        child: _TagOrganizerPanel(
-                          selectedExistingTags: _selectedExistingTags,
-                          newTagNames: _newTagNames,
-                          hasSavedTags: _availableTags.isNotEmpty,
-                          onManageSavedTags: _openSavedTagsPickerSheet,
-                          onCreateTag: _openCreateTagSheet,
-                          onRemoveExistingTag: _removeSelectedTagId,
-                          onRemoveNewTag: _removeNewTag,
-                        ),
-                      ),
-                      const SizedBox(height: _formSectionSpacing),
                       SizedBox(
                         width: double.infinity,
                         child: CollectorButton(
@@ -1404,6 +1428,33 @@ class _PhotoPreview extends StatelessWidget {
   final XFile? selectedImage;
   final String? existingPhotoUrl;
   final String? lookupImageUrl;
+
+  bool _isRemoteUrl(String value) {
+    final parsed = Uri.tryParse(value);
+    return parsed != null &&
+        (parsed.scheme == 'http' || parsed.scheme == 'https');
+  }
+
+  Widget _buildExistingPhoto() {
+    final existingPhotoUrl = this.existingPhotoUrl;
+    if (existingPhotoUrl == null) {
+      return const _PhotoPreviewEmpty();
+    }
+
+    if (_isRemoteUrl(existingPhotoUrl)) {
+      return Image.network(
+        existingPhotoUrl,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
+      );
+    }
+
+    return Image.file(
+      File(existingPhotoUrl),
+      fit: BoxFit.cover,
+      errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1450,11 +1501,7 @@ class _PhotoPreview extends StatelessWidget {
             ? Stack(
                 fit: StackFit.expand,
                 children: [
-                  Image.network(
-                    existingPhotoUrl!,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
-                  ),
+                  _buildExistingPhoto(),
                   Align(
                     alignment: Alignment.bottomLeft,
                     child: Container(
@@ -1860,108 +1907,6 @@ class _TextAreaField extends StatelessWidget {
   }
 }
 
-class _TagOrganizerPanel extends StatelessWidget {
-  const _TagOrganizerPanel({
-    required this.selectedExistingTags,
-    required this.newTagNames,
-    required this.hasSavedTags,
-    required this.onManageSavedTags,
-    required this.onCreateTag,
-    required this.onRemoveExistingTag,
-    required this.onRemoveNewTag,
-  });
-
-  final List<TagModel> selectedExistingTags;
-  final List<String> newTagNames;
-  final bool hasSavedTags;
-  final VoidCallback onManageSavedTags;
-  final VoidCallback onCreateTag;
-  final ValueChanged<String> onRemoveExistingTag;
-  final ValueChanged<String> onRemoveNewTag;
-
-  @override
-  Widget build(BuildContext context) {
-    final hasTags = selectedExistingTags.isNotEmpty || newTagNames.isNotEmpty;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (hasTags)
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(AppSpacing.md),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceContainerHighest.withValues(alpha: 0.38),
-              borderRadius: AppRadii.medium,
-              border: Border.all(
-                color: AppColors.tertiary.withValues(alpha: 0.22),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'SELECTED TAGS',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelSmall?.copyWith(color: AppColors.tertiary),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Wrap(
-                  spacing: AppSpacing.sm,
-                  runSpacing: AppSpacing.sm,
-                  children: [
-                    ...selectedExistingTags.map(
-                      (tag) => _SelectedTagChip(
-                        label: tag.name,
-                        tone: _ChipTone.tag,
-                        onRemove: () => onRemoveExistingTag(tag.id!),
-                      ),
-                    ),
-                    ...newTagNames.map(
-                      (tagName) => _SelectedTagChip(
-                        label: tagName,
-                        tone: _ChipTone.tag,
-                        onRemove: () => onRemoveNewTag(tagName),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          )
-        else
-          Text(
-            'Skip tags on the first save if you want. You can always organize it later.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: AppColors.onSurfaceVariant),
-          ),
-        const SizedBox(height: AppSpacing.md),
-        Row(
-          children: [
-            Expanded(
-              child: _ActionTileButton(
-                icon: Icons.label_outline_rounded,
-                label: hasSavedTags ? 'Browse saved tags' : 'No saved tags yet',
-                onTap: hasSavedTags ? onManageSavedTags : onCreateTag,
-              ),
-            ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: _ActionTileButton(
-                icon: Icons.add_rounded,
-                label: 'Create tag',
-                onTap: onCreateTag,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
 enum CollectorState { favorite, grail, duplicate }
 
 class _CollectorStatusPanel extends StatelessWidget {
@@ -2118,10 +2063,12 @@ class _TagSearchBottomSheet extends StatefulWidget {
   const _TagSearchBottomSheet({
     required this.availableTags,
     required this.selectedTagIds,
+    required this.newTagNames,
   });
 
   final List<TagModel> availableTags;
   final Set<String> selectedTagIds;
+  final List<String> newTagNames;
 
   @override
   State<_TagSearchBottomSheet> createState() => _TagSearchBottomSheetState();
@@ -2130,6 +2077,7 @@ class _TagSearchBottomSheet extends StatefulWidget {
 class _TagSearchBottomSheetState extends State<_TagSearchBottomSheet> {
   final _searchController = TextEditingController();
   late final Set<String> _workingSelection = {...widget.selectedTagIds};
+  late final List<String> _workingNewTagNames = [...widget.newTagNames];
   String _query = '';
 
   @override
@@ -2153,9 +2101,9 @@ class _TagSearchBottomSheetState extends State<_TagSearchBottomSheet> {
           );
 
     return _SelectionBottomSheetShell(
-      title: 'Browse saved tags',
+      title: 'Choose tags',
       description:
-          'Search and toggle the tags you want without opening a giant chip wall.',
+          'Search, toggle, or create tags without opening a giant chip wall.',
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2170,6 +2118,42 @@ class _TagSearchBottomSheetState extends State<_TagSearchBottomSheet> {
             },
           ),
           const SizedBox(height: AppSpacing.md),
+          _SheetActionRow(
+            label: 'Create tag',
+            icon: Icons.add_rounded,
+            onTap: () => Navigator.of(context).pop(
+              _TagPickerSheetResult.create(
+                _workingSelection,
+                _workingNewTagNames,
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          if (_workingNewTagNames.isNotEmpty) ...[
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 150),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: _workingNewTagNames.length,
+                separatorBuilder: (_, _) =>
+                    const SizedBox(height: AppSpacing.xs),
+                itemBuilder: (context, index) {
+                  final tagName = _workingNewTagNames[index];
+                  return _SheetSelectableRow(
+                    label: tagName,
+                    selected: true,
+                    leadingIcon: Icons.new_label_outlined,
+                    onTap: () {
+                      setState(() {
+                        _workingNewTagNames.removeAt(index);
+                      });
+                    },
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+          ],
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 320),
             child: filteredTags.isEmpty
@@ -2217,13 +2201,52 @@ class _TagSearchBottomSheetState extends State<_TagSearchBottomSheet> {
             width: double.infinity,
             child: CollectorButton(
               label: 'Apply tags',
-              onPressed: () => Navigator.of(context).pop(_workingSelection),
+              onPressed: () => Navigator.of(context).pop(
+                _TagPickerSheetResult.apply(
+                  _workingSelection,
+                  _workingNewTagNames,
+                ),
+              ),
             ),
           ),
         ],
       ),
     );
   }
+}
+
+class _TagPickerSheetResult {
+  const _TagPickerSheetResult({
+    required this.selectedTagIds,
+    required this.newTagNames,
+    required this.createRequested,
+  });
+
+  factory _TagPickerSheetResult.apply(
+    Set<String> selectedTagIds,
+    List<String> newTagNames,
+  ) {
+    return _TagPickerSheetResult(
+      selectedTagIds: {...selectedTagIds},
+      newTagNames: [...newTagNames],
+      createRequested: false,
+    );
+  }
+
+  factory _TagPickerSheetResult.create(
+    Set<String> selectedTagIds,
+    List<String> newTagNames,
+  ) {
+    return _TagPickerSheetResult(
+      selectedTagIds: {...selectedTagIds},
+      newTagNames: [...newTagNames],
+      createRequested: true,
+    );
+  }
+
+  final Set<String> selectedTagIds;
+  final List<String> newTagNames;
+  final bool createRequested;
 }
 
 class _SelectionBottomSheetShell extends StatelessWidget {
@@ -2379,64 +2402,6 @@ class _BasicsDivider extends StatelessWidget {
       width: double.infinity,
       height: 1,
       color: AppColors.onSurfaceVariant.withValues(alpha: 0.24),
-    );
-  }
-}
-
-class _SelectedTagChip extends StatelessWidget {
-  const _SelectedTagChip({
-    required this.label,
-    this.tone = _ChipTone.tag,
-    required this.onRemove,
-  });
-
-  final String label;
-  final _ChipTone tone;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = _chipPaletteForTone(tone);
-    final maxChipWidth = MediaQuery.sizeOf(context).width * 0.72;
-
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxChipWidth),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: palette.selectedBackground,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: palette.selectedBorder),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: palette.selectedForeground,
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            InkWell(
-              onTap: onRemove,
-              borderRadius: BorderRadius.circular(999),
-              child: Padding(
-                padding: const EdgeInsets.all(2),
-                child: Icon(
-                  Icons.close_rounded,
-                  size: 16,
-                  color: palette.selectedForeground,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

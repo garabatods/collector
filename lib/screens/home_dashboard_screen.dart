@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../core/data/archive_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_radii.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/archive_sync_status_banner.dart';
 import '../widgets/collector_bottom_bar.dart';
-import '../widgets/collector_chip.dart';
-import '../widgets/collector_panel.dart';
 import 'ai_photo_identification_screen.dart';
 import 'collection_home_screen.dart';
 import 'collection_library_screen.dart';
 import 'collection_profile_screen.dart';
+import 'collection_wishlist_screen.dart';
 import 'manual_add_collectible_screen.dart';
 import 'scanner_flow_screen.dart';
 
@@ -35,9 +36,28 @@ enum _DashboardTab {
 }
 
 class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
+  final _archiveRepository = ArchiveRepository.instance;
   var _selectedTab = _DashboardTab.home;
   var _refreshSeed = 0;
   var _librarySearchFocusRequest = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(_lifecycleObserver);
+    _archiveRepository.initializeForCurrentUser();
+  }
+
+  late final WidgetsBindingObserver _lifecycleObserver =
+      _DashboardLifecycleObserver(
+        onResumed: () => _archiveRepository.handleAppResumed(),
+      );
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(_lifecycleObserver);
+    super.dispose();
+  }
 
   void _selectTab(_DashboardTab tab) {
     setState(() {
@@ -139,12 +159,10 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
           searchFocusRequest: _librarySearchFocusRequest,
         ),
       ),
-      const SafeArea(
+      SafeArea(
         bottom: false,
-        child: _TabPlaceholder(
-          icon: Icons.favorite_outline_rounded,
-          title: 'Wishlist',
-          description: 'A dedicated wishlist view is not available yet.',
+        child: CollectionWishlistScreen(
+          refreshSeed: _refreshSeed,
         ),
       ),
       SafeArea(
@@ -188,6 +206,15 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
               children: _buildTabs(),
             ),
           ),
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              bottom: false,
+              child: ArchiveSyncStatusBanner(),
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: CollectorBottomBar(
@@ -225,6 +252,19 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         ],
       ),
     );
+  }
+}
+
+class _DashboardLifecycleObserver with WidgetsBindingObserver {
+  _DashboardLifecycleObserver({required this.onResumed});
+
+  final Future<void> Function() onResumed;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      onResumed();
+    }
   }
 }
 
@@ -418,66 +458,6 @@ class _AddEntryOptionTile extends StatelessWidget {
                 ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TabPlaceholder extends StatelessWidget {
-  const _TabPlaceholder({
-    required this.icon,
-    required this.title,
-    required this.description,
-  });
-
-  final IconData icon;
-  final String title;
-  final String description;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: CollectorPanel(
-          padding: const EdgeInsets.all(AppSpacing.xl),
-          backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.92),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.primaryContainer.withValues(alpha: 0.16),
-                ),
-                child: Icon(
-                  icon,
-                  color: AppColors.primary,
-                  size: 32,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                title,
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                description,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              const CollectorChip(
-                label: 'Coming Next',
-              ),
-            ],
           ),
         ),
       ),

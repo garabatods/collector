@@ -14,10 +14,13 @@ You are helping build **Collector App**, a Flutter mobile app in VS Code with Su
 - If a database migration is needed, generate the SQL clearly and explain what it does.
 - Prefer small, reviewable changes.
 - Do not patch UI repeatedly with tiny local tweaks by default. First judge whether the request is truly small; if the issue affects hierarchy, spacing, typography, repeated copy, or a reused pattern, prefer a proper component-level redesign or cleanup instead of stacking one-off patches.
+- If the user asks to push, publish, or prepare a commit/PR, always check `git status` first for personal, machine-specific, signing, credential, or generated files that should not be committed. Do this even if the user forgets to ask.
 - After each step, say exactly how to test it.
 - Always tell the user whether the change needs a full `flutter run` restart or just `r` / hot reload.
 - If the change is UI-only, explicitly recommend using Flutter hot reload to verify it instead of rebuilding.
 - Only recommend a full restart or rebuild when the change affects app startup, runtime config, dependencies, native setup, or other non-UI initialization.
+- For archive and collection-facing read surfaces, default to the local-first architecture documented in `mdFiles/07_LOCAL_FIRST_ARCHITECTURE_RULES.md`.
+- Do not introduce new remote-first browse screens by default.
 
 ## Product guardrails
 - This is **not** just an inventory utility.

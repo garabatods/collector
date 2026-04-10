@@ -134,7 +134,9 @@ class _AiPhotoIdentificationScreenState
           scannedBarcode: widget.seedBarcode ?? _result?.barcode,
           identificationResult: _result,
           autofillResult: autofillResult,
-          initialImage: _selectedImage,
+          initialImage: (_result?.imageUrl ?? '').isNotEmpty
+              ? null
+              : _selectedImage,
         ),
       ),
     );
@@ -226,18 +228,6 @@ class _AiPhotoIdentificationScreenState
                     variant: CollectorButtonVariant.icon,
                     icon: Icons.arrow_back_rounded,
                   ),
-                  const SizedBox(height: AppSpacing.md),
-                  Text(
-                    'Identify with AI',
-                    style: Theme.of(context).textTheme.headlineLarge,
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    'Best for comics, loose items, rare pieces, and barcode-less collectibles.',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-                  ),
                   if ((widget.seedBarcode ?? '').isNotEmpty) ...[
                     const SizedBox(height: AppSpacing.md),
                     _SeedBarcodeBanner(barcode: widget.seedBarcode!),
@@ -255,7 +245,6 @@ class _AiPhotoIdentificationScreenState
                           children: [
                             _PremiumImageStage(
                               selectedImage: _selectedImage,
-                              phase: phase,
                             ),
                             const SizedBox(height: AppSpacing.lg),
                             Wrap(
@@ -434,10 +423,9 @@ class _SeedBarcodeBanner extends StatelessWidget {
 }
 
 class _PremiumImageStage extends StatelessWidget {
-  const _PremiumImageStage({required this.selectedImage, required this.phase});
+  const _PremiumImageStage({required this.selectedImage});
 
   final XFile? selectedImage;
-  final _AiPhotoPhase phase;
 
   @override
   Widget build(BuildContext context) {
@@ -515,7 +503,7 @@ class _PremiumImageStage extends StatelessWidget {
                     ),
                     const SizedBox(height: AppSpacing.xs),
                     Text(
-                      'Cover art, loose figures, boxed sets, and rare pieces all work well here.',
+                      'Cover art, loose figures, boxed sets, and rare pieces all work well here. Use a full-frame photo for the strongest result.',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: AppColors.onSurfaceVariant,
@@ -524,48 +512,6 @@ class _PremiumImageStage extends StatelessWidget {
                   ],
                 ),
               ),
-            Positioned(
-              left: AppSpacing.md,
-              right: AppSpacing.md,
-              bottom: AppSpacing.md,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md,
-                  vertical: AppSpacing.sm,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.38),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.14),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      phase == _AiPhotoPhase.identifying
-                          ? Icons.auto_awesome_rounded
-                          : Icons.photo_camera_back_outlined,
-                      color: AppColors.white,
-                      size: 18,
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: Text(
-                        phase == _AiPhotoPhase.identifying
-                            ? 'Analyzing image and enriching collectible details'
-                            : selectedImage == null
-                            ? 'Use a full-frame photo for the strongest result'
-                            : 'Selected photo ready for AI identification',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: AppColors.white,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
           ],
         ),
       ),
@@ -655,6 +601,7 @@ class _AiResultCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final confidence = result.confidence;
+    final imageUrl = (result.imageUrl ?? '').trim();
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpacing.md),
@@ -695,6 +642,48 @@ class _AiResultCard extends StatelessWidget {
               ],
             ],
           ),
+          if (imageUrl.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.md),
+            Container(
+              height: 190,
+              width: double.infinity,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                color: AppColors.surfaceContainerHigh,
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.network(
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
+                  Align(
+                    alignment: Alignment.bottomLeft,
+                    child: Container(
+                      margin: const EdgeInsets.all(AppSpacing.md),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.sm,
+                        vertical: AppSpacing.xs,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.48),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        'Suggested photo',
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: AppSpacing.md),
           Text(result.title, style: Theme.of(context).textTheme.headlineSmall),
           if ((result.suggestedCategory ?? '').isNotEmpty) ...[

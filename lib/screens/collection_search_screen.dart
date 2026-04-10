@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
-import '../features/collection/data/models/collectible_model.dart';
-import '../features/collection/data/repositories/collectible_photos_repository.dart';
-import '../features/collection/data/repositories/collectibles_repository.dart';
+import '../core/data/archive_repository.dart';
+import '../core/data/archive_types.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_loading_overlay.dart';
@@ -44,24 +44,20 @@ enum _CollectionSearchSortOption {
 }
 
 class _CollectionSearchScreenState extends State<CollectionSearchScreen> {
-  final _collectiblesRepository = CollectiblesRepository();
-  final _photosRepository = CollectiblePhotosRepository();
+  final _archiveRepository = ArchiveRepository.instance;
   final _queryController = TextEditingController();
 
-  late Future<_CollectionSearchData> _future;
   var _didChangeCollection = false;
   late bool _favoritesOnly;
   late bool _grailsOnly;
   late bool _duplicatesOnly;
   var _sort = _CollectionSearchSortOption.relevance;
-  final Map<String, bool> _favoriteOverrides = <String, bool>{};
 
   String get _query => _queryController.text.trim();
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
     _queryController.text = widget.initialQuery;
     _favoritesOnly = widget.initialFavoritesOnly;
     _grailsOnly = widget.initialGrailsOnly;
@@ -81,179 +77,13 @@ class _CollectionSearchScreenState extends State<CollectionSearchScreen> {
     setState(() {});
   }
 
-  Future<_CollectionSearchData> _load() async {
-    final collectibles = await _collectiblesRepository.fetchAll();
-    final ids =
-        collectibles.map((item) => item.id).whereType<String>().toList(growable: false);
-    final primaryPhotos = await _photosRepository.fetchPrimaryPhotoMap(ids);
-
-    final urls = <String, String>{};
-    for (final entry in primaryPhotos.entries) {
-      final signedUrl = await _photosRepository.createSignedPhotoUrl(entry.value);
-      if (signedUrl != null) {
-        urls[entry.key] = signedUrl;
-      }
-    }
-
-    return _CollectionSearchData(
-      collectibles: collectibles,
-      photoUrlsByCollectibleId: urls,
-    );
-  }
-
   Future<void> _reload() async {
     _didChangeCollection = true;
-    _favoriteOverrides.clear();
-    setState(() {
-      _future = _load();
-    });
-    await _future;
+    await _archiveRepository.syncIfNeeded(force: true);
   }
 
   void _handleBack() {
     Navigator.of(context).pop(_didChangeCollection);
-  }
-
-  List<CollectibleModel> _applyBrowseState(List<CollectibleModel> items) {
-    final resolvedItems = items.map(_applyFavoriteOverride);
-    final query = _query.toLowerCase();
-    final queryTerms = query.split(RegExp(r'\s+')).where((term) => term.isNotEmpty).toList();
-
-    final filtered = resolvedItems.where((item) {
-      if (_favoritesOnly && !item.isFavorite) {
-        return false;
-      }
-      if (_grailsOnly && !item.isGrail) {
-        return false;
-      }
-      if (_duplicatesOnly && !item.isDuplicate) {
-        return false;
-      }
-      if (queryTerms.isEmpty) {
-        return true;
-      }
-      return _matchesQuery(item, queryTerms);
-    }).toList(growable: false);
-
-    filtered.sort((a, b) {
-      switch (_sort) {
-        case _CollectionSearchSortOption.relevance:
-          if (queryTerms.isEmpty) {
-            return _compareDateDesc(a, b);
-          }
-          final scoreDelta = _scoreItem(b, queryTerms) - _scoreItem(a, queryTerms);
-          return scoreDelta == 0 ? _compareDateDesc(a, b) : scoreDelta;
-        case _CollectionSearchSortOption.newest:
-          return _compareDateDesc(a, b);
-        case _CollectionSearchSortOption.oldest:
-          return _compareDateAsc(a, b);
-        case _CollectionSearchSortOption.titleAscending:
-          return a.title.toLowerCase().compareTo(b.title.toLowerCase());
-        case _CollectionSearchSortOption.titleDescending:
-          return b.title.toLowerCase().compareTo(a.title.toLowerCase());
-      }
-    });
-
-    return filtered;
-  }
-
-  CollectibleModel _applyFavoriteOverride(CollectibleModel item) {
-    final id = item.id;
-    if (id == null) {
-      return item;
-    }
-
-    final isFavorite = _favoriteOverrides[id];
-    return isFavorite == null ? item : item.copyWith(isFavorite: isFavorite);
-  }
-
-  void _handleCollectibleUpdated(CollectibleModel collectible) {
-    final id = collectible.id;
-    if (id == null) {
-      return;
-    }
-
-    setState(() {
-      _favoriteOverrides[id] = collectible.isFavorite;
-    });
-  }
-
-  bool _matchesQuery(CollectibleModel item, List<String> queryTerms) {
-    return queryTerms.every((term) => _buildSearchHaystack(item).contains(term));
-  }
-
-  String _buildSearchHaystack(CollectibleModel item) {
-    final values = <String>[
-      item.title,
-      item.category,
-      item.brand ?? '',
-      item.series ?? '',
-      item.lineOrSeries ?? '',
-      item.characterOrSubject ?? '',
-      item.itemNumber ?? '',
-      item.boxStatus ?? '',
-      item.itemCondition ?? '',
-      for (final tag in item.tags) tag.name,
-    ];
-
-    return values.join(' ').toLowerCase();
-  }
-
-  int _scoreItem(CollectibleModel item, List<String> queryTerms) {
-    var score = 0;
-    final title = item.title.toLowerCase();
-    final category = item.category.toLowerCase();
-    final brand = (item.brand ?? '').toLowerCase();
-    final series = (item.series ?? item.lineOrSeries ?? '').toLowerCase();
-    final tags = item.tags.map((tag) => tag.name.toLowerCase()).toList(growable: false);
-
-    for (final term in queryTerms) {
-      if (title == term) {
-        score += 400;
-      } else if (title.startsWith(term)) {
-        score += 260;
-      } else if (title.contains(term)) {
-        score += 180;
-      }
-
-      if (brand.startsWith(term)) {
-        score += 120;
-      } else if (brand.contains(term)) {
-        score += 90;
-      }
-
-      if (series.startsWith(term)) {
-        score += 80;
-      } else if (series.contains(term)) {
-        score += 60;
-      }
-
-      if (category.startsWith(term)) {
-        score += 64;
-      } else if (category.contains(term)) {
-        score += 44;
-      }
-
-      if (tags.any((tag) => tag == term)) {
-        score += 80;
-      } else if (tags.any((tag) => tag.contains(term))) {
-        score += 52;
-      }
-    }
-
-    return score;
-  }
-
-  int _compareDateDesc(CollectibleModel a, CollectibleModel b) {
-    final aDate = a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final bDate = b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    return bDate.compareTo(aDate);
-  }
-
-  int _compareDateAsc(CollectibleModel a, CollectibleModel b) {
-    final aDate = a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final bDate = b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    return aDate.compareTo(bDate);
   }
 
   Future<void> _openSortSheet() async {
@@ -279,6 +109,16 @@ class _CollectionSearchScreenState extends State<CollectionSearchScreen> {
     _queryController.clear();
   }
 
+  ArchiveLibrarySort get _archiveSort => switch (_sort) {
+        _CollectionSearchSortOption.relevance => ArchiveLibrarySort.relevance,
+        _CollectionSearchSortOption.newest => ArchiveLibrarySort.newest,
+        _CollectionSearchSortOption.oldest => ArchiveLibrarySort.oldest,
+        _CollectionSearchSortOption.titleAscending =>
+          ArchiveLibrarySort.titleAscending,
+        _CollectionSearchSortOption.titleDescending =>
+          ArchiveLibrarySort.titleDescending,
+      };
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -299,172 +139,169 @@ class _CollectionSearchScreenState extends State<CollectionSearchScreen> {
             ),
           ),
           SafeArea(
-            child: FutureBuilder<_CollectionSearchData>(
-              future: _future,
-              builder: (context, snapshot) {
-                final data = snapshot.data;
-                final isRefreshing = snapshot.connectionState != ConnectionState.done;
+            child: ArchiveBootstrapGate(
+              child: StreamBuilder<ArchiveSearchResults>(
+                stream: _archiveRepository.watchSearchResults(
+                  query: _query,
+                  favoritesOnly: _favoritesOnly,
+                  grailsOnly: _grailsOnly,
+                  duplicatesOnly: _duplicatesOnly,
+                  sort: _archiveSort,
+                ),
+                builder: (context, snapshot) {
+                  final data = snapshot.data;
 
-                if (snapshot.hasError && data == null) {
-                  return _CollectionSearchErrorState(
-                    onRetry: _reload,
-                    onBack: _handleBack,
-                  );
-                }
+                  if (snapshot.hasError && data == null) {
+                    return _CollectionSearchErrorState(
+                      onRetry: _reload,
+                      onBack: _handleBack,
+                    );
+                  }
 
-                if (data == null) {
-                  return const CollectorLoadingOverlay();
-                }
+                  if (data == null) {
+                    return const CollectorLoadingOverlay();
+                  }
 
-                if (data.collectibles.isEmpty) {
-                  return _CollectionSearchEmptyState(onBack: _handleBack);
-                }
+                  if (data.collectibles.isEmpty) {
+                    return _CollectionSearchEmptyState(onBack: _handleBack);
+                  }
 
-                final visibleItems = _applyBrowseState(data.collectibles);
+                  final visibleItems = data.collectibles;
 
-                return Stack(
-                  children: [
-                    CustomScrollView(
-                      slivers: [
-                        SliverToBoxAdapter(
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(
-                              AppSpacing.md,
-                              AppSpacing.md,
-                              AppSpacing.md,
-                              AppSpacing.lg,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                CollectorButton(
-                                  label: 'Back',
-                                  onPressed: _handleBack,
-                                  variant: CollectorButtonVariant.icon,
-                                  icon: Icons.arrow_back_rounded,
-                                ),
-                                const SizedBox(height: AppSpacing.lg),
-                                Text(
-                                  widget.screenTitle,
-                                  style: Theme.of(context).textTheme.headlineLarge,
-                                ),
-                                const SizedBox(height: AppSpacing.sm),
-                                Text(
-                                  _query.isEmpty
-                                      ? widget.emptyPrompt
-                                      : '${visibleItems.length} match${visibleItems.length == 1 ? '' : 'es'} in your collection',
-                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  return CustomScrollView(
+                    slivers: [
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            AppSpacing.md,
+                            AppSpacing.md,
+                            AppSpacing.md,
+                            AppSpacing.lg,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              CollectorButton(
+                                label: 'Back',
+                                onPressed: _handleBack,
+                                variant: CollectorButtonVariant.icon,
+                                icon: Icons.arrow_back_rounded,
+                              ),
+                              const SizedBox(height: AppSpacing.lg),
+                              Text(
+                                widget.screenTitle,
+                                style:
+                                    Theme.of(context).textTheme.headlineLarge,
+                              ),
+                              const SizedBox(height: AppSpacing.sm),
+                              Text(
+                                _query.isEmpty
+                                    ? widget.emptyPrompt
+                                    : '${visibleItems.length} match${visibleItems.length == 1 ? '' : 'es'} in your collection',
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      color: AppColors.onSurfaceVariant,
+                                    ),
+                              ),
+                              const SizedBox(height: AppSpacing.lg),
+                              CollectorSearchField(
+                                hintText: 'Search your collection...',
+                                fillColor: AppColors.surfaceContainerHighest
+                                    .withValues(alpha: 0.78),
+                                controller: _queryController,
+                                readOnly: false,
+                                autofocus: widget.autofocus,
+                                onChanged: (_) {},
+                                suffixIcon: _query.isEmpty
+                                    ? null
+                                    : IconButton(
+                                        onPressed: _clearQuery,
+                                        icon:
+                                            const Icon(Icons.close_rounded),
                                         color: AppColors.onSurfaceVariant,
                                       ),
-                                ),
-                                const SizedBox(height: AppSpacing.lg),
-                                CollectorSearchField(
-                                  hintText: 'Search your collection...',
-                                  fillColor: AppColors.surfaceContainerHighest.withValues(
-                                    alpha: 0.78,
-                                  ),
-                                  controller: _queryController,
-                                  readOnly: false,
-                                  autofocus: widget.autofocus,
-                                  onChanged: (_) {},
-                                  suffixIcon: _query.isEmpty
-                                      ? null
-                                      : IconButton(
-                                          onPressed: _clearQuery,
-                                          icon: const Icon(Icons.close_rounded),
-                                          color: AppColors.onSurfaceVariant,
-                                        ),
-                                ),
-                                const SizedBox(height: AppSpacing.lg),
-                                _CollectionSearchBrowseControls(
-                                  sortLabel: _sort.label,
-                                  favoritesOnly: _favoritesOnly,
-                                  grailsOnly: _grailsOnly,
-                                  duplicatesOnly: _duplicatesOnly,
-                                  onSortTap: _openSortSheet,
-                                  onFavoritesTap: () {
-                                    setState(() {
-                                      _favoritesOnly = !_favoritesOnly;
-                                    });
-                                  },
-                                  onGrailsTap: () {
-                                    setState(() {
-                                      _grailsOnly = !_grailsOnly;
-                                    });
-                                  },
-                                  onDuplicatesTap: () {
-                                    setState(() {
-                                      _duplicatesOnly = !_duplicatesOnly;
-                                    });
-                                  },
-                                ),
-                                const SizedBox(height: AppSpacing.md),
-                                _SearchHintPanel(query: _query),
-                                if (visibleItems.isEmpty) ...[
-                                  const SizedBox(height: AppSpacing.lg),
-                                  _CollectionSearchNoResultsPanel(
-                                    hasQuery: _query.isNotEmpty,
-                                    onClearQuery: _clearQuery,
-                                    onClearFilters: () {
-                                      setState(() {
-                                        _favoritesOnly = false;
-                                        _grailsOnly = false;
-                                        _duplicatesOnly = false;
-                                      });
-                                    },
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ),
-                        if (visibleItems.isNotEmpty)
-                          SliverPadding(
-                            padding: const EdgeInsets.fromLTRB(
-                              AppSpacing.md,
-                              0,
-                              AppSpacing.md,
-                              AppSpacing.xxl,
-                            ),
-                            sliver: SliverGrid(
-                              delegate: SliverChildBuilderDelegate(
-                                (context, index) {
-                                  final collectible = visibleItems[index];
-                                  final id = collectible.id;
-                                  final photoUrl =
-                                      id == null ? null : data.photoUrlsByCollectibleId[id];
-
-                                  return CollectibleGridCard(
-                                    collectible: collectible,
-                                    photoUrl: photoUrl,
-                                    onCollectionChanged: _reload,
-                                    onCollectibleUpdated: _handleCollectibleUpdated,
-                                  );
+                              ),
+                              const SizedBox(height: AppSpacing.lg),
+                              _CollectionSearchBrowseControls(
+                                sortLabel: _sort.label,
+                                favoritesOnly: _favoritesOnly,
+                                grailsOnly: _grailsOnly,
+                                duplicatesOnly: _duplicatesOnly,
+                                onSortTap: _openSortSheet,
+                                onFavoritesTap: () {
+                                  setState(() {
+                                    _favoritesOnly = !_favoritesOnly;
+                                  });
                                 },
-                                childCount: visibleItems.length,
+                                onGrailsTap: () {
+                                  setState(() {
+                                    _grailsOnly = !_grailsOnly;
+                                  });
+                                },
+                                onDuplicatesTap: () {
+                                  setState(() {
+                                    _duplicatesOnly = !_duplicatesOnly;
+                                  });
+                                },
                               ),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 2,
-                                crossAxisSpacing: AppSpacing.md,
-                                mainAxisSpacing: AppSpacing.md,
-                                childAspectRatio: 0.72,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    if (isRefreshing)
-                      const Positioned.fill(
-                        child: IgnorePointer(
-                          child: CollectorLoadingOverlay(
-                            backdropOpacity: 0.12,
+                              const SizedBox(height: AppSpacing.md),
+                              _SearchHintPanel(query: _query),
+                              if (visibleItems.isEmpty) ...[
+                                const SizedBox(height: AppSpacing.lg),
+                                _CollectionSearchNoResultsPanel(
+                                  hasQuery: _query.isNotEmpty,
+                                  onClearQuery: _clearQuery,
+                                  onClearFilters: () {
+                                    setState(() {
+                                      _favoritesOnly = false;
+                                      _grailsOnly = false;
+                                      _duplicatesOnly = false;
+                                    });
+                                  },
+                                ),
+                              ],
+                            ],
                           ),
                         ),
                       ),
-                  ],
-                );
-              },
+                      if (visibleItems.isNotEmpty)
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(
+                            AppSpacing.md,
+                            0,
+                            AppSpacing.md,
+                            AppSpacing.xxl,
+                          ),
+                          sliver: SliverGrid(
+                            delegate: SliverChildBuilderDelegate(
+                              (context, index) {
+                                final collectible = visibleItems[index];
+                                final id = collectible.id;
+                                final photoRef = id == null
+                                    ? null
+                                    : data.photoRefsByCollectibleId[id];
+
+                                return CollectibleGridCard(
+                                  collectible: collectible,
+                                  photoRef: photoRef,
+                                  onCollectionChanged: _reload,
+                                );
+                              },
+                              childCount: visibleItems.length,
+                            ),
+                            gridDelegate:
+                                const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 2,
+                                  crossAxisSpacing: AppSpacing.md,
+                                  mainAxisSpacing: AppSpacing.md,
+                                  childAspectRatio: 0.72,
+                                ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ],
@@ -866,14 +703,4 @@ class _SearchMessagePanel extends StatelessWidget {
       ),
     );
   }
-}
-
-class _CollectionSearchData {
-  const _CollectionSearchData({
-    required this.collectibles,
-    required this.photoUrlsByCollectibleId,
-  });
-
-  final List<CollectibleModel> collectibles;
-  final Map<String, String> photoUrlsByCollectibleId;
 }

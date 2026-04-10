@@ -1,21 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/data/archive_repository.dart';
+import '../core/data/archive_types.dart';
 import '../features/collection/data/models/collectible_model.dart';
-import '../features/collection/data/repositories/collectible_photos_repository.dart';
-import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../features/profile/data/models/profile_model.dart';
-import '../features/profile/data/repositories/profile_avatar_repository.dart';
-import '../features/profile/data/repositories/profile_repository.dart';
-import '../features/wishlist/data/repositories/wishlist_items_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_fonts.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/archive_bootstrap_gate.dart';
+import '../widgets/archive_photo_view.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/collector_section_header.dart';
 import '../widgets/collector_text_field.dart';
+import '../widgets/resolved_avatar_image.dart';
 import 'category_collection_screen.dart';
 import 'collectible_detail_screen.dart';
 
@@ -44,75 +44,26 @@ class CollectionHomeScreen extends StatefulWidget {
 }
 
 class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
-  final _collectiblesRepository = CollectiblesRepository();
-  final _photosRepository = CollectiblePhotosRepository();
-  final _wishlistRepository = WishlistItemsRepository();
-  final _profileRepository = ProfileRepository();
-  final _profileAvatarRepository = ProfileAvatarRepository();
+  final _archiveRepository = ArchiveRepository.instance;
 
-  late Future<_CollectionHomeData> _future;
+  late Stream<ArchiveHomeSummary> _stream;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _stream = _archiveRepository.watchHomeSummary();
   }
 
   @override
   void didUpdateWidget(covariant CollectionHomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.refreshSeed != widget.refreshSeed) {
-      _future = _load();
+      _archiveRepository.syncIfNeeded(force: true);
     }
-  }
-
-  Future<_CollectionHomeData> _load() async {
-    final collectibles = await _collectiblesRepository.fetchAll();
-    final wishlistItems = await _wishlistRepository.fetchAll();
-    final profile = await _profileRepository.fetchCurrentProfile();
-    final recentItems = collectibles.take(6).toList(growable: false);
-    final favoriteItems = collectibles
-        .where((item) => item.isFavorite)
-        .take(6)
-        .toList(growable: false);
-    final homeShelfIds = <String>{
-      ...recentItems.map((item) => item.id).whereType<String>(),
-      ...favoriteItems.map((item) => item.id).whereType<String>(),
-    }.toList(growable: false);
-    final primaryPhotos = await _photosRepository.fetchPrimaryPhotoMap(
-      homeShelfIds,
-    );
-
-    final homePhotoUrls = <String, String>{};
-    for (final entry in primaryPhotos.entries) {
-      final signedUrl = await _photosRepository.createSignedPhotoUrl(
-        entry.value,
-      );
-      if (signedUrl != null) {
-        homePhotoUrls[entry.key] = signedUrl;
-      }
-    }
-
-    final profileAvatarUrl = await _profileAvatarRepository.resolveAvatarUrl(
-      profile?.avatarUrl,
-    );
-
-    return _CollectionHomeData(
-      profile: profile,
-      profileAvatarUrl: profileAvatarUrl,
-      collectibles: collectibles,
-      wishlistCount: wishlistItems.length,
-      recentItems: recentItems,
-      favoriteItems: favoriteItems,
-      homePhotoUrls: homePhotoUrls,
-    );
   }
 
   Future<void> _reload() async {
-    setState(() {
-      _future = _load();
-    });
-    await _future;
+    await _archiveRepository.syncIfNeeded(force: true);
   }
 
   @override
@@ -125,56 +76,50 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
         systemNavigationBarColor: AppColors.background,
         systemNavigationBarIconBrightness: Brightness.light,
       ),
-      child: FutureBuilder<_CollectionHomeData>(
-        future: _future,
-        builder: (context, snapshot) {
-          final data = snapshot.data;
-          final isRefreshing = snapshot.connectionState != ConnectionState.done;
+      child: ArchiveBootstrapGate(
+        child: StreamBuilder<ArchiveHomeSummary>(
+          stream: _stream,
+          builder: (context, snapshot) {
+            final data = snapshot.data;
 
-          if (snapshot.hasError && data == null) {
-            return const _HomeMessageState(
-              icon: Icons.cloud_off_rounded,
-              title: 'Could not load your collection.',
-              description:
-                  'We could not reach your collection data. Check your connection and try again.',
-              tone: AppColors.secondary,
-            );
-          }
+            if (snapshot.hasError && data == null) {
+              return const _HomeMessageState(
+                icon: Icons.cloud_off_rounded,
+                title: 'Could not load your collection.',
+                description:
+                    'We could not reach your collection data. Check your connection and try again.',
+                tone: AppColors.secondary,
+              );
+            }
 
-          if (data == null) {
-            return const CollectorLoadingOverlay(label: 'Refreshing home...');
-          }
+            if (data == null) {
+              return const CollectorLoadingOverlay(
+                label: 'Loading your archive...',
+              );
+            }
 
-          if (data.collectibles.isEmpty) {
-            return _EmptyHomeState(
-              wishlistCount: data.wishlistCount,
-              onAddFirstItem: widget.onAddFirstItem,
-              onScanItem: widget.onScanItem,
-              onOpenProfile: widget.onOpenProfile,
-            );
-          }
-
-          return Stack(
-            children: [
-              _LoadedHomeState(
-                data: data,
-                collectibles: data.collectibles,
-                onCollectionChanged: _reload,
-                onOpenSearch: widget.onOpenSearch,
+            if (data.collectibles.isEmpty) {
+              return _EmptyHomeState(
+                wishlistCount: data.wishlistCount,
+                onAddFirstItem: widget.onAddFirstItem,
+                onScanItem: widget.onScanItem,
                 onOpenProfile: widget.onOpenProfile,
-              ),
-              if (isRefreshing)
-                const Positioned.fill(
-                  child: IgnorePointer(
-                    child: CollectorLoadingOverlay(
-                      label: 'Refreshing home...',
-                      backdropOpacity: 0.12,
-                    ),
-                  ),
+              );
+            }
+
+            return Stack(
+              children: [
+                _LoadedHomeState(
+                  data: data,
+                  collectibles: data.collectibles,
+                  onCollectionChanged: _reload,
+                  onOpenSearch: widget.onOpenSearch,
+                  onOpenProfile: widget.onOpenProfile,
                 ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -189,7 +134,7 @@ class _LoadedHomeState extends StatefulWidget {
     required this.onOpenProfile,
   });
 
-  final _CollectionHomeData data;
+  final ArchiveHomeSummary data;
   final List<CollectibleModel> collectibles;
   final Future<void> Function() onCollectionChanged;
   final VoidCallback onOpenSearch;
@@ -243,7 +188,7 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
           searchOnly: _showSearchOnly,
           onSearchTap: widget.onOpenSearch,
           profile: widget.data.profile,
-          profileAvatarUrl: widget.data.profileAvatarUrl,
+          profileAvatarUrl: widget.data.profile?.avatarUrl?.trim(),
           onOpenProfile: widget.onOpenProfile,
         ),
         Expanded(
@@ -360,12 +305,12 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                           const SizedBox(width: AppSpacing.md),
                       itemBuilder: (context, index) {
                         final item = recentItems[index];
-                        final photoUrl = item.id == null
+                        final photoRef = item.id == null
                             ? null
-                            : widget.data.homePhotoUrls[item.id];
+                            : widget.data.photoRefsByCollectibleId[item.id];
                         return _RecentCollectibleCard(
                           collectible: item,
-                          photoUrl: photoUrl,
+                          photoRef: photoRef,
                           compactLayout: compactLayout,
                           onCollectionChanged: widget.onCollectionChanged,
                         );
@@ -400,12 +345,12 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                           const SizedBox(width: AppSpacing.md),
                       itemBuilder: (context, index) {
                         final item = favoriteItems[index];
-                        final photoUrl = item.id == null
+                        final photoRef = item.id == null
                             ? null
-                            : widget.data.homePhotoUrls[item.id];
+                            : widget.data.photoRefsByCollectibleId[item.id];
                         return _RecentCollectibleCard(
                           collectible: item,
-                          photoUrl: photoUrl,
+                          photoRef: photoRef,
                           compactLayout: compactLayout,
                           onCollectionChanged: widget.onCollectionChanged,
                         );
@@ -781,14 +726,12 @@ class _HomeProfilePlaceholder extends StatelessWidget {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(15),
-            child: profileAvatarUrl?.trim().isNotEmpty == true
-                ? Image.network(
-                    profileAvatarUrl!,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) =>
-                        _HomeAvatarFallback(initials: initials),
-                  )
-                : _HomeAvatarFallback(initials: initials),
+            child: ResolvedAvatarImage(
+              avatarSource: profileAvatarUrl,
+              fit: BoxFit.cover,
+              fallback: _HomeAvatarFallback(initials: initials),
+              error: _HomeAvatarFallback(initials: initials),
+            ),
           ),
         ),
       ),
@@ -984,13 +927,13 @@ bool _categoryCardShouldCenterForIndex({
 class _RecentCollectibleCard extends StatelessWidget {
   const _RecentCollectibleCard({
     required this.collectible,
-    required this.photoUrl,
+    required this.photoRef,
     required this.compactLayout,
     required this.onCollectionChanged,
   });
 
   final CollectibleModel collectible;
-  final String? photoUrl;
+  final ArchivePhotoRef? photoRef;
   final bool compactLayout;
   final Future<void> Function() onCollectionChanged;
 
@@ -1007,7 +950,7 @@ class _RecentCollectibleCard extends StatelessWidget {
               MaterialPageRoute<bool>(
                 builder: (_) => CollectibleDetailScreen(
                   collectible: collectible,
-                  photoUrl: photoUrl,
+                  photoRef: photoRef,
                 ),
               ),
             );
@@ -1029,14 +972,10 @@ class _RecentCollectibleCard extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (photoUrl != null)
-                    Image.network(
-                      photoUrl!,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                    )
-                  else
-                    Container(
+                  ArchivePhotoView(
+                    photoRef: photoRef,
+                    fit: BoxFit.cover,
+                    placeholder: Container(
                       color: AppColors.surfaceContainerHighest,
                       child: const Center(
                         child: Icon(
@@ -1046,6 +985,8 @@ class _RecentCollectibleCard extends StatelessWidget {
                         ),
                       ),
                     ),
+                    error: const SizedBox.shrink(),
+                  ),
                   Container(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
@@ -1238,25 +1179,6 @@ class _HomeMessageState extends StatelessWidget {
   }
 }
 
-class _CollectionHomeData {
-  const _CollectionHomeData({
-    required this.profile,
-    required this.profileAvatarUrl,
-    required this.collectibles,
-    required this.wishlistCount,
-    required this.recentItems,
-    required this.favoriteItems,
-    required this.homePhotoUrls,
-  });
-
-  final ProfileModel? profile;
-  final String? profileAvatarUrl;
-  final List<CollectibleModel> collectibles;
-  final int wishlistCount;
-  final List<CollectibleModel> recentItems;
-  final List<CollectibleModel> favoriteItems;
-  final Map<String, String> homePhotoUrls;
-}
 
 class _CategoryHighlight {
   const _CategoryHighlight({

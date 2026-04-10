@@ -72,7 +72,62 @@ interface OpenAiPhotoResult {
 const upcItemDbEndpoint = "https://api.upcitemdb.com/prod/trial/lookup";
 const goUpcEndpoint = "https://go-upc.com/api/v1/code";
 const comicVineSearchEndpoint = "https://comicvine.gamespot.com/api/search/";
-const openAiChatEndpoint = "https://api.openai.com/v1/chat/completions";
+const openAiResponsesEndpoint = "https://api.openai.com/v1/responses";
+const defaultOpenAiPhotoModel = "gpt-4o-mini";
+const collectibleIdentificationSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: { type: "string" },
+    suggested_category: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "string",
+          enum: [...appCategories],
+        },
+      ],
+    },
+    description: { anyOf: [{ type: "string" }, { type: "null" }] },
+    brand: { anyOf: [{ type: "string" }, { type: "null" }] },
+    franchise: { anyOf: [{ type: "string" }, { type: "null" }] },
+    series: { anyOf: [{ type: "string" }, { type: "null" }] },
+    character_or_subject: { anyOf: [{ type: "string" }, { type: "null" }] },
+    release_year: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    confidence: { anyOf: [{ type: "number" }, { type: "null" }] },
+    source_badge: { anyOf: [{ type: "string" }, { type: "null" }] },
+    is_comic_like: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+    comic_context: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            issue_number: { anyOf: [{ type: "string" }, { type: "null" }] },
+            volume_name: { anyOf: [{ type: "string" }, { type: "null" }] },
+            publisher: { anyOf: [{ type: "string" }, { type: "null" }] },
+          },
+          required: ["issue_number", "volume_name", "publisher"],
+        },
+      ],
+    },
+  },
+  required: [
+    "title",
+    "suggested_category",
+    "description",
+    "brand",
+    "franchise",
+    "series",
+    "character_or_subject",
+    "release_year",
+    "confidence",
+    "source_badge",
+    "is_comic_like",
+    "comic_context",
+  ],
+} as const;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -216,21 +271,32 @@ Deno.serve(async (req) => {
     });
 
     let finalMatch: ProviderMatch = {
-      status: openAiResult.result.title.isEmpty ? "partial" : "matched",
+      status: openAiResult.result.title.trim().length === 0 ? "partial" : "matched",
       providerStage: "openai",
       result: openAiResult.result,
       rawResult: openAiResult.rawResult,
     };
 
+    const barcodeCatalogEnriched = await enrichPhotoWithBarcodeCatalog({
+      barcode: barcodeHint,
+      baseResult: finalMatch.result,
+      openAiRawResult: openAiResult.rawResult,
+    });
+    if (barcodeCatalogEnriched) {
+      finalMatch = barcodeCatalogEnriched;
+    }
+
     if (openAiResult.isComicLike) {
-      const comicEnriched = await enrichComicProviders(openAiResult.result);
+      const comicEnriched = await enrichComicProviders(finalMatch.result);
       if (comicEnriched) {
         finalMatch = {
-          status: comicEnriched.result.title.isEmpty ? "partial" : "enriched",
+          status: comicEnriched.result.title.trim().length === 0
+            ? "partial"
+            : "enriched",
           providerStage: "comicvine",
           result: comicEnriched.result,
           rawResult: {
-            openai: openAiResult.rawResult,
+            upstream: finalMatch.rawResult,
             comicvine: comicEnriched.rawResult,
           },
         };
@@ -474,44 +540,55 @@ async function identifyPhotoWithOpenAi({
   mimeType: string;
   barcode: string | null;
 }): Promise<OpenAiPhotoResult> {
-  const apiKey = mustGetEnv("OPEN_AI_KEY");
+  const apiKey = Deno.env.get("OPEN_AI_KEY") ?? mustGetEnv("OPENAI_API_KEY");
+  const model = Deno.env.get("OPEN_AI_PHOTO_MODEL") ?? defaultOpenAiPhotoModel;
   const dataUrl = `data:${mimeType};base64,${imageBase64}`;
 
-  const response = await fetch(openAiChatEndpoint, {
+  const response = await fetch(openAiResponsesEndpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages: [
+      model,
+      input: [
         {
-          role: "system",
-          content:
-            "You identify collectible products from photos. Return valid minified JSON only, with no markdown fences or extra prose. Prefer specific collectible titles when possible. If unsure, keep title empty instead of inventing. suggested_category must be one of: Action Figures, Board Games, Comics, Memorabilia, Die-cast, Vinyl Figures, Statues, Trading Cards, Other.",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "You identify collectible products from photos. Return only schema-valid JSON. Prefer specific collectible titles when possible. If unsure, keep title empty instead of inventing. suggested_category must be one of: Action Figures, Board Games, Comics, Memorabilia, Die-cast, Vinyl Figures, Statues, Trading Cards, Other.",
+            },
+          ],
         },
         {
           role: "user",
           content: [
             {
-              type: "text",
+              type: "input_text",
               text:
                 `Identify the collectible in this photo. Respond with JSON using exactly these keys: title, suggested_category, description, brand, franchise, series, character_or_subject, release_year, confidence, source_badge, is_comic_like, comic_context. comic_context must be either null or an object with issue_number, volume_name, publisher. Use null for unknown optional fields. Confidence should be between 0 and 1. Source badge should be a short premium-facing label like "AI identification". Barcode hint: ${barcode ?? "none"}.`,
             },
             {
-              type: "image_url",
-              image_url: {
-                url: dataUrl,
-                detail: "high",
-              },
+              type: "input_image",
+              image_url: dataUrl,
+              detail: "high",
             },
           ],
         },
       ],
-      response_format: { type: "json_object" },
+      text: {
+        format: {
+          type: "json_schema",
+          name: "collectible_identification",
+          strict: true,
+          schema: collectibleIdentificationSchema,
+        },
+      },
       temperature: 0.2,
-      max_tokens: 900,
+      max_output_tokens: 900,
     }),
   });
 
@@ -526,13 +603,7 @@ async function identifyPhotoWithOpenAi({
     );
   }
 
-  const firstChoice = asRecord(asArray(payload?.choices)[0]);
-  const message = asRecord(firstChoice ? firstChoice["message"] : null);
-  const rawContent = message ? message["content"] : null;
-  const firstContentPart = asRecord(asArray(rawContent)[0]);
-  const rawJson = typeof rawContent === "string"
-    ? rawContent
-    : cleanString(firstContentPart ? firstContentPart["text"] : null);
+  const rawJson = extractResponsesOutputText(payload);
   if (!rawJson) {
     throw new Error("OpenAI did not return structured JSON.");
   }
@@ -545,7 +616,8 @@ async function identifyPhotoWithOpenAi({
       status: "matched",
       providerStage: "openai",
       title: cleanString(parsed.title) ?? "",
-      suggestedCategory: cleanString(parsed.suggested_category) ?? "Other",
+      suggestedCategory: normalizeSuggestedCategory(parsed.suggested_category) ??
+        "Other",
       imageUrl: null,
       description: cleanString(parsed.description),
       brand: cleanString(parsed.brand),
@@ -566,7 +638,63 @@ async function identifyPhotoWithOpenAi({
     }),
     rawResult: payload,
     isComicLike: Boolean(parsed.is_comic_like) ||
-        cleanString(parsed.suggested_category) == "Comics",
+        normalizeSuggestedCategory(parsed.suggested_category) == "Comics",
+  };
+}
+
+async function enrichPhotoWithBarcodeCatalog({
+  barcode,
+  baseResult,
+  openAiRawResult,
+}: {
+  barcode: string | null;
+  baseResult: NormalizedIdentificationResult;
+  openAiRawResult: unknown;
+}): Promise<ProviderMatch | null> {
+  if (!barcode) {
+    return null;
+  }
+
+  const providerMatch = await lookupUpcItemDb(barcode) ?? await lookupGoUpc(barcode);
+  if (!providerMatch) {
+    return null;
+  }
+
+  const providerResult = providerMatch.result;
+  const mergedResult = normalizeResult({
+    status: baseResult.title.trim().length === 0 &&
+        providerResult.title.trim().length === 0
+        ? "partial"
+        : "enriched",
+    providerStage: providerMatch.providerStage,
+    title: choosePreferredTitle(baseResult.title, providerResult.title),
+    suggestedCategory:
+      normalizeSuggestedCategory(baseResult.suggested_category) ??
+      normalizeSuggestedCategory(providerResult.suggested_category),
+    imageUrl: providerResult.image_url ?? baseResult.image_url,
+    description: providerResult.description ?? baseResult.description,
+    brand: providerResult.brand ?? baseResult.brand,
+    franchise: baseResult.franchise ?? providerResult.franchise,
+    series: baseResult.series ?? providerResult.series,
+    characterOrSubject:
+      baseResult.character_or_subject ?? providerResult.character_or_subject,
+    releaseYear: baseResult.release_year ?? providerResult.release_year,
+    barcode: barcode,
+    confidence: Math.max(baseResult.confidence ?? 0.6, providerResult.confidence ?? 0),
+    sourceBadge: providerMatch.providerStage === "goupc"
+        ? "AI + GO-UPC image"
+        : "AI + Catalog image",
+    comicContext: baseResult.comic_context ?? providerResult.comic_context,
+  });
+
+  return {
+    status: mergedResult.title.trim().length === 0 ? "partial" : "enriched",
+    providerStage: providerMatch.providerStage,
+    result: mergedResult,
+    rawResult: {
+      openai: openAiRawResult,
+      [providerMatch.providerStage]: providerMatch.rawResult,
+    },
   };
 }
 
@@ -592,6 +720,11 @@ async function enrichWithComicVine(
   }
 
   const query = [baseResult.title, baseResult.series, baseResult.franchise]
+    .concat([
+      baseResult.comic_context?.issue_number,
+      baseResult.comic_context?.volume_name,
+      baseResult.comic_context?.publisher,
+    ])
     .filter((value): value is string => Boolean(value && value.trim()))
     .join(" ");
   if (!query.trim()) {
@@ -676,6 +809,11 @@ function pickBestComicVineMatch(
   baseResult: NormalizedIdentificationResult,
 ): JsonMap | null {
   const wanted = normalizeText(baseResult.title || baseResult.series || "");
+  const wantedSeries = normalizeText(
+    baseResult.comic_context?.volume_name ?? baseResult.series ?? "",
+  );
+  const wantedIssue = normalizeText(baseResult.comic_context?.issue_number ?? "");
+  const wantedPublisher = normalizeText(baseResult.comic_context?.publisher ?? "");
   let bestScore = -1;
   let best: JsonMap | null = null;
 
@@ -686,6 +824,14 @@ function pickBestComicVineMatch(
     }
     const name = normalizeText(cleanString(row["name"]) ?? "");
     const deck = normalizeText(cleanString(row["deck"]) ?? "");
+    const issueNumber = normalizeText(cleanString(row["issue_number"]) ?? "");
+    const volume = asRecord(row["volume"]);
+    const volumeName = normalizeText(cleanString(volume ? volume["name"] : null) ?? "");
+    const publisher = asRecord(row["publisher"]) ||
+      asRecord(volume ? volume["publisher"] : null);
+    const publisherName = normalizeText(
+      cleanString(publisher ? publisher["name"] : null) ?? "",
+    );
     let score = 0;
     if (wanted && name === wanted) {
       score += 10;
@@ -693,6 +839,17 @@ function pickBestComicVineMatch(
       score += 7;
     } else if (wanted && deck.includes(wanted)) {
       score += 4;
+    }
+    if (wantedSeries && volumeName === wantedSeries) {
+      score += 6;
+    } else if (wantedSeries && volumeName.includes(wantedSeries)) {
+      score += 4;
+    }
+    if (wantedIssue && issueNumber === wantedIssue) {
+      score += 6;
+    }
+    if (wantedPublisher && publisherName === wantedPublisher) {
+      score += 3;
     }
     if (cleanString(row["resource_type"]) === "issue") {
       score += 2;
@@ -802,6 +959,38 @@ function preferredImageUrl(rawImages: unknown): string | null {
     .map((image) => cleanString(image))
     .filter((image): image is string => Boolean(image));
   return images.find((image) => image.startsWith("https://")) ?? images[0] ?? null;
+}
+
+function choosePreferredTitle(primary: string, fallback: string | null): string {
+  const normalizedPrimary = cleanString(primary) ?? "";
+  const normalizedFallback = cleanString(fallback);
+  if (!normalizedPrimary) {
+    return normalizedFallback ?? "";
+  }
+  if (!normalizedFallback) {
+    return normalizedPrimary;
+  }
+  const primaryText = normalizeText(normalizedPrimary);
+  const fallbackText = normalizeText(normalizedFallback);
+  if (primaryText === fallbackText) {
+    return normalizedFallback.length > normalizedPrimary.length
+      ? normalizedFallback
+      : normalizedPrimary;
+  }
+  if (fallbackText.includes(primaryText)) {
+    return normalizedFallback;
+  }
+  return normalizedPrimary;
+}
+
+function normalizeSuggestedCategory(value: unknown): string | null {
+  const category = cleanString(value);
+  if (!category) {
+    return null;
+  }
+  return appCategories.includes(category as (typeof appCategories)[number])
+    ? category
+    : null;
 }
 
 function suggestCollectorCategory(
@@ -968,6 +1157,35 @@ function cleanString(value: unknown): string | null {
 
 function normalizeText(value: string): string {
   return value.toLowerCase().replaceAll(/[^a-z0-9]+/g, " ").trim();
+}
+
+function extractResponsesOutputText(payload: JsonMap): string | null {
+  const directText = cleanString(payload.output_text);
+  if (directText) {
+    return directText;
+  }
+
+  for (const outputItem of asArray(payload.output)) {
+    const outputRecord = asRecord(outputItem);
+    if (!outputRecord) {
+      continue;
+    }
+    for (const contentItem of asArray(outputRecord.content)) {
+      const contentRecord = asRecord(contentItem);
+      if (!contentRecord) {
+        continue;
+      }
+      if (cleanString(contentRecord.type) !== "output_text") {
+        continue;
+      }
+      const text = cleanString(contentRecord.text);
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return null;
 }
 
 function normalizeBarcode(value: string | null): string | null {

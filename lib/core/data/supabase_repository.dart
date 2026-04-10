@@ -1,3 +1,4 @@
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 abstract class SupabaseRepository {
@@ -15,4 +16,25 @@ abstract class SupabaseRepository {
 
     return userId;
   }
+
+  Future<void> ensureOnlineForWrite() async {
+    final connectivity = await Connectivity().checkConnectivity();
+    final isOffline = connectivity.every(
+      (result) => result == ConnectivityResult.none,
+    );
+    if (isOffline) {
+      throw const OfflineWriteException(
+        'Browsing works offline, but changes require an internet connection.',
+      );
+    }
+  }
+}
+
+class OfflineWriteException implements Exception {
+  const OfflineWriteException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'OfflineWriteException: $message';
 }

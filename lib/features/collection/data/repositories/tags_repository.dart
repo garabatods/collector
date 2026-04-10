@@ -1,9 +1,13 @@
 import '../../../../core/data/json_map.dart';
+import '../../../../core/data/local_archive_database.dart';
 import '../../../../core/data/supabase_repository.dart';
 import '../models/tag_model.dart';
 
 class TagsRepository extends SupabaseRepository {
   TagsRepository({super.client});
+
+  static final LocalArchiveDatabase _localDatabase =
+      LocalArchiveDatabase.instance;
 
   Future<List<TagModel>> fetchAll() async {
     final data = await client
@@ -16,6 +20,7 @@ class TagsRepository extends SupabaseRepository {
   }
 
   Future<TagModel> create(String name) async {
+    await ensureOnlineForWrite();
     final data = await client
         .from('tags')
         .insert(
@@ -26,7 +31,9 @@ class TagsRepository extends SupabaseRepository {
         .select()
         .single();
 
-    return TagModel.fromJson(asJsonMap(data));
+    final tag = TagModel.fromJson(asJsonMap(data));
+    await _localDatabase.upsertTag(tag, currentUserId);
+    return tag;
   }
 
   Future<List<TagModel>> resolveUserTags({

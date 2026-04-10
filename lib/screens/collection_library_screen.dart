@@ -1,13 +1,10 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
-import '../core/data/session_cache.dart';
-import '../features/collection/data/models/collectible_model.dart';
-import '../features/collection/data/repositories/collectible_photos_repository.dart';
-import '../features/collection/data/repositories/collectibles_repository.dart';
+import '../core/data/archive_repository.dart';
+import '../core/data/archive_types.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_loading_overlay.dart';
@@ -30,111 +27,28 @@ class CollectionLibraryScreen extends StatefulWidget {
 }
 
 class _CollectionLibraryScreenState extends State<CollectionLibraryScreen> {
-  final _collectiblesRepository = CollectiblesRepository();
-  final _photosRepository = CollectiblePhotosRepository();
-
-  late Future<_CollectionLibraryBootstrapData> _future;
-
-  @override
-  void initState() {
-    super.initState();
-    _future = _load();
-  }
+  final _archiveRepository = ArchiveRepository.instance;
 
   @override
   void didUpdateWidget(covariant CollectionLibraryScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.refreshSeed != widget.refreshSeed) {
-      _future = _load();
+      _archiveRepository.syncIfNeeded(force: true);
     }
   }
 
-  Future<_CollectionLibraryBootstrapData> _load() async {
-    final page = await _collectiblesRepository.fetchPage(
-      limit: CollectiblesRepository.libraryDefaultPageSize,
-    );
-    final categorySummaries = await _collectiblesRepository
-        .fetchCategoryCounts();
-
-    return _CollectionLibraryBootstrapData(
-      initialPage: page,
-      initialPhotoUrls: await _resolvePhotoUrls(page.items),
-      categoryStats: categorySummaries
-          .map(
-            (summary) => _CategoryShelfStat(
-              category: summary.category,
-              count: summary.count,
-            ),
-          )
-          .toList(growable: false),
-    );
-  }
-
   Future<void> _reload() async {
-    setState(() {
-      _future = _load();
-    });
-    await _future;
+    await _archiveRepository.syncIfNeeded(force: true);
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<_CollectionLibraryBootstrapData>(
-      future: _future,
-      builder: (context, snapshot) {
-        final data = snapshot.data;
-        final isRefreshing = snapshot.connectionState != ConnectionState.done;
-
-        if (snapshot.hasError && data == null) {
-          return _CollectionLibraryErrorState(onRetry: _reload);
-        }
-
-        if (data == null) {
-          return const _CollectionLibraryLoadingState();
-        }
-
-        if (data.initialPage.totalCount == 0) {
-          return const _CollectionLibraryEmptyState();
-        }
-
-        return Stack(
-          children: [
-            _CollectionLibraryLoadedState(
-              data: data,
-              searchFocusRequest: widget.searchFocusRequest,
-              onCollectionChanged: _reload,
-            ),
-            if (isRefreshing)
-              const Positioned.fill(
-                child: IgnorePointer(
-                  child: CollectorLoadingOverlay(backdropOpacity: 0.12),
-                ),
-              ),
-          ],
-        );
-      },
+    return ArchiveBootstrapGate(
+      child: _CollectionLibraryLoadedState(
+        searchFocusRequest: widget.searchFocusRequest,
+        onCollectionChanged: _reload,
+      ),
     );
-  }
-
-  Future<Map<String, String>> _resolvePhotoUrls(
-    List<CollectibleModel> collectibles,
-  ) async {
-    final ids = collectibles
-        .map((item) => item.id)
-        .whereType<String>()
-        .toList(growable: false);
-    final primaryPhotos = await _photosRepository.fetchPrimaryPhotoMap(ids);
-
-    final urls = <String, String>{};
-    for (final entry in primaryPhotos.entries) {
-      final signedUrl = await _photosRepository.createSignedPhotoUrl(
-        entry.value,
-      );
-      if (signedUrl != null) {
-        urls[entry.key] = signedUrl;
-      }
-    }
-    return urls;
   }
 }
 
@@ -146,14 +60,14 @@ enum _LibrarySortOption {
   category,
 }
 
+enum _LibraryViewMode { grid, list }
+
 class _CollectionLibraryLoadedState extends StatefulWidget {
   const _CollectionLibraryLoadedState({
-    required this.data,
     required this.searchFocusRequest,
     required this.onCollectionChanged,
   });
 
-  final _CollectionLibraryBootstrapData data;
   final int searchFocusRequest;
   final Future<void> Function() onCollectionChanged;
 
@@ -164,11 +78,9 @@ class _CollectionLibraryLoadedState extends StatefulWidget {
 
 class _CollectionLibraryLoadedStateState
     extends State<_CollectionLibraryLoadedState> {
-  static const _cachePrefix = 'library:browse:';
-  static const _photoCacheMaxAge = Duration(minutes: 45);
+  static const _pageSize = 24;
 
-  final _collectiblesRepository = CollectiblesRepository();
-  final _photosRepository = CollectiblePhotosRepository();
+  final _archiveRepository = ArchiveRepository.instance;
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
   final _scrollController = ScrollController();
@@ -179,29 +91,24 @@ class _CollectionLibraryLoadedStateState
   var _hasPhotoOnly = false;
   String? _selectedCategory;
   var _sort = _LibrarySortOption.newest;
-  Timer? _searchDebounce;
-  List<CollectibleModel> _items = const [];
-  Map<String, String> _photoUrlsByCollectibleId = const {};
-  List<_CategoryShelfStat> _categoryStats = const [];
-  var _totalCount = 0;
-  var _nextOffset = 0;
-  var _hasMore = false;
-  var _isRefreshingResults = false;
-  var _isLoadingMore = false;
+  var _viewMode = _LibraryViewMode.grid;
+  var _visibleItemCount = _pageSize;
+  var _knownResultCount = 0;
+  var _isExpandingVisibleItems = false;
+  late Stream<ArchiveLibraryPage> _stream;
 
   String get _query => _searchController.text.trim();
 
   @override
   void initState() {
     super.initState();
+    _stream = _buildStream();
     _searchController.addListener(_handleQueryChanged);
     _scrollController.addListener(_handleScroll);
-    _syncFromBootstrap(widget.data);
   }
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
     _scrollController
       ..removeListener(_handleScroll)
       ..dispose();
@@ -215,23 +122,15 @@ class _CollectionLibraryLoadedStateState
   @override
   void didUpdateWidget(covariant _CollectionLibraryLoadedState oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.data, widget.data)) {
-      SessionCache.removeWherePrefix(_cachePrefix);
-      if (_hasDefaultBrowseState) {
-        _syncFromBootstrap(widget.data);
-      } else {
-        unawaited(_refreshResults(resetScroll: false, forceNetwork: true));
-      }
-    }
     if (oldWidget.searchFocusRequest != widget.searchFocusRequest) {
       _focusSearchField();
     }
   }
 
   void _handleQueryChanged() {
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
-      _refreshResults(resetScroll: true);
+    setState(() {
+      _visibleItemCount = _pageSize;
+      _stream = _buildStream();
     });
   }
 
@@ -245,29 +144,35 @@ class _CollectionLibraryLoadedStateState
   }
 
   void _handleScroll() {
-    if (!_scrollController.hasClients ||
-        _isLoadingMore ||
-        !_hasMore ||
-        _isRefreshingResults) {
+    if (!_scrollController.hasClients) {
       return;
     }
 
     final threshold = _scrollController.position.maxScrollExtent - 420;
+    if (_isExpandingVisibleItems ||
+        (_knownResultCount > 0 && _visibleItemCount >= _knownResultCount)) {
+      return;
+    }
+
     if (_scrollController.position.pixels >= threshold) {
-      _loadNextPage();
+      final nextVisibleCount = _visibleItemCount + _pageSize;
+      setState(() {
+        _isExpandingVisibleItems = true;
+        _visibleItemCount = _knownResultCount > 0
+            ? nextVisibleCount.clamp(_pageSize, _knownResultCount).toInt()
+            : nextVisibleCount;
+        _stream = _buildStream();
+      });
     }
   }
 
-  void _syncFromBootstrap(_CollectionLibraryBootstrapData data) {
-    _items = data.initialPage.items;
-    _photoUrlsByCollectibleId = data.initialPhotoUrls;
-    _categoryStats = data.categoryStats;
-    _totalCount = data.initialPage.totalCount;
-    _nextOffset = data.initialPage.nextOffset;
-    _hasMore = data.initialPage.hasMore;
-    _isRefreshingResults = false;
-    _isLoadingMore = false;
-    _persistCurrentBrowseState();
+  void _resetVisibleItems() {
+    _visibleItemCount = _pageSize;
+    _knownResultCount = 0;
+    _isExpandingVisibleItems = false;
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
   }
 
   Future<void> _openSortSheet() async {
@@ -284,8 +189,9 @@ class _CollectionLibraryLoadedStateState
 
     setState(() {
       _sort = nextSort;
+      _resetVisibleItems();
+      _stream = _buildStream();
     });
-    await _refreshResults(resetScroll: true);
   }
 
   Future<void> _openFilterSheet() async {
@@ -311,12 +217,43 @@ class _CollectionLibraryLoadedStateState
       _grailsOnly = nextFilters.grailsOnly;
       _duplicatesOnly = nextFilters.duplicatesOnly;
       _hasPhotoOnly = nextFilters.hasPhotoOnly;
+      _resetVisibleItems();
+      _stream = _buildStream();
     });
-    await _refreshResults(resetScroll: true);
+  }
+
+  Future<void> _openScopeSheet({
+    required List<_CategoryShelfStat> categories,
+    required int totalCount,
+  }) async {
+    final nextScope = await showModalBottomSheet<_LibraryBrowseScope>(
+      context: context,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => _LibraryScopeSheet(
+        selectedCategory: _selectedCategory,
+        categories: categories,
+        totalCount: totalCount,
+      ),
+    );
+
+    if (!mounted || nextScope == null) {
+      return;
+    }
+
+    if (nextScope.category == _selectedCategory) {
+      return;
+    }
+
+    setState(() {
+      _selectedCategory = nextScope.category;
+      _resetVisibleItems();
+      _stream = _buildStream();
+    });
   }
 
   Future<void> _clearAllBrowseState() async {
-    _searchDebounce?.cancel();
     setState(() {
       _favoritesOnly = false;
       _grailsOnly = false;
@@ -325,25 +262,9 @@ class _CollectionLibraryLoadedStateState
       _selectedCategory = null;
       _searchController.clear();
       _sort = _LibrarySortOption.newest;
+      _resetVisibleItems();
+      _stream = _buildStream();
     });
-    await _refreshResults(resetScroll: true);
-  }
-
-  void _handleCollectibleUpdated(CollectibleModel collectible) {
-    final id = collectible.id;
-    if (id == null) {
-      return;
-    }
-
-    setState(() {
-      _items = _items
-          .map((item) => item.id == id ? collectible : item)
-          .toList(growable: false);
-    });
-
-    if (_favoritesOnly && !collectible.isFavorite) {
-      _refreshResults(resetScroll: false);
-    }
   }
 
   bool get _hasActiveRefinementState {
@@ -373,367 +294,250 @@ class _CollectionLibraryLoadedStateState
     return count;
   }
 
-  Future<void> _refreshResults({
-    required bool resetScroll,
-    bool forceNetwork = false,
-  }) async {
-    if (!forceNetwork) {
-      final cached = SessionCache.get<_CachedLibraryBrowseState>(_cacheKey);
-      if (cached != null && !cached.hasExpiredPhotoUrls(_photoCacheMaxAge)) {
-        if (mounted) {
-          setState(() {
-            _applyCachedBrowseState(cached);
-          });
-        } else {
-          _applyCachedBrowseState(cached);
-        }
-        if (resetScroll && _scrollController.hasClients) {
-          _scrollController.animateTo(
-            0,
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-          );
-        }
-        return;
-      }
-    }
-
-    if (mounted) {
-      setState(() {
-        _isRefreshingResults = true;
-      });
-    }
-
-    try {
-      final page = await _collectiblesRepository.fetchPage(
-        offset: 0,
-        limit: CollectiblesRepository.libraryDefaultPageSize,
-        query: _query,
-        favoritesOnly: _favoritesOnly,
-        grailsOnly: _grailsOnly,
-        duplicatesOnly: _duplicatesOnly,
-        hasPhotoOnly: _hasPhotoOnly,
-        category: _selectedCategory,
-        sort: _currentSort,
-      );
-      final categorySummaries = await _collectiblesRepository
-          .fetchCategoryCounts(
-            query: _query,
-            favoritesOnly: _favoritesOnly,
-            grailsOnly: _grailsOnly,
-            duplicatesOnly: _duplicatesOnly,
-            hasPhotoOnly: _hasPhotoOnly,
-          );
-      final photoUrls = await _resolvePhotoUrls(page.items);
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _items = page.items;
-        _photoUrlsByCollectibleId = photoUrls;
-        _categoryStats = categorySummaries
-            .map(
-              (summary) => _CategoryShelfStat(
-                category: summary.category,
-                count: summary.count,
-              ),
-            )
-            .toList(growable: false);
-        _totalCount = page.totalCount;
-        _nextOffset = page.nextOffset;
-        _hasMore = page.hasMore;
-        _isRefreshingResults = false;
-      });
-      _persistCurrentBrowseState();
-
-      if (resetScroll && _scrollController.hasClients) {
-        _scrollController.animateTo(
-          0,
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-        );
-      }
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _isRefreshingResults = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not refresh the library right now.'),
-        ),
-      );
-    }
-  }
-
-  Future<void> _loadNextPage() async {
-    setState(() {
-      _isLoadingMore = true;
-    });
-
-    try {
-      final page = await _collectiblesRepository.fetchPage(
-        offset: _nextOffset,
-        limit: CollectiblesRepository.libraryDefaultPageSize,
-        query: _query,
-        favoritesOnly: _favoritesOnly,
-        grailsOnly: _grailsOnly,
-        duplicatesOnly: _duplicatesOnly,
-        hasPhotoOnly: _hasPhotoOnly,
-        category: _selectedCategory,
-        sort: _currentSort,
-      );
-      final photoUrls = await _resolvePhotoUrls(page.items);
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _items = [..._items, ...page.items];
-        _photoUrlsByCollectibleId = {
-          ..._photoUrlsByCollectibleId,
-          ...photoUrls,
-        };
-        _nextOffset = page.nextOffset;
-        _hasMore = page.hasMore;
-        _isLoadingMore = false;
-      });
-      _persistCurrentBrowseState();
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _isLoadingMore = false;
-      });
-    }
-  }
-
-  Future<Map<String, String>> _resolvePhotoUrls(
-    List<CollectibleModel> collectibles,
-  ) async {
-    final ids = collectibles
-        .map((item) => item.id)
-        .whereType<String>()
-        .toList(growable: false);
-    final primaryPhotos = await _photosRepository.fetchPrimaryPhotoMap(ids);
-
-    final urls = <String, String>{};
-    for (final entry in primaryPhotos.entries) {
-      final signedUrl = await _photosRepository.createSignedPhotoUrl(
-        entry.value,
-      );
-      if (signedUrl != null) {
-        urls[entry.key] = signedUrl;
-      }
-    }
-
-    return urls;
-  }
-
-  CollectiblePageSort get _currentSort => switch (_sort) {
-    _LibrarySortOption.newest => CollectiblePageSort.newest,
-    _LibrarySortOption.oldest => CollectiblePageSort.oldest,
-    _LibrarySortOption.titleAscending => CollectiblePageSort.titleAscending,
-    _LibrarySortOption.titleDescending => CollectiblePageSort.titleDescending,
-    _LibrarySortOption.category => CollectiblePageSort.category,
+  ArchiveLibrarySort get _archiveSort => switch (_sort) {
+    _LibrarySortOption.newest => ArchiveLibrarySort.newest,
+    _LibrarySortOption.oldest => ArchiveLibrarySort.oldest,
+    _LibrarySortOption.titleAscending => ArchiveLibrarySort.titleAscending,
+    _LibrarySortOption.titleDescending => ArchiveLibrarySort.titleDescending,
+    _LibrarySortOption.category => ArchiveLibrarySort.category,
   };
 
-  String get _cacheKey {
-    return [
-      _cachePrefix,
-      _query.toLowerCase(),
-      _favoritesOnly,
-      _grailsOnly,
-      _duplicatesOnly,
-      _hasPhotoOnly,
-      _selectedCategory?.toLowerCase() ?? '',
-      _sort.name,
-    ].join('|');
-  }
-
-  void _persistCurrentBrowseState() {
-    SessionCache.set(
-      _cacheKey,
-      _CachedLibraryBrowseState(
-        items: _items,
-        photoUrlsByCollectibleId: _photoUrlsByCollectibleId,
-        categoryStats: _categoryStats,
-        totalCount: _totalCount,
-        nextOffset: _nextOffset,
-        hasMore: _hasMore,
+  Stream<ArchiveLibraryPage> _buildStream() {
+    return _archiveRepository.watchLibraryPage(
+      filters: ArchiveLibraryFilters(
+        query: _query,
+        favoritesOnly: _favoritesOnly,
+        grailsOnly: _grailsOnly,
+        duplicatesOnly: _duplicatesOnly,
+        hasPhotoOnly: _hasPhotoOnly,
+        category: _selectedCategory,
       ),
+      sort: _archiveSort,
+      limit: _visibleItemCount,
     );
-  }
-
-  void _applyCachedBrowseState(_CachedLibraryBrowseState cached) {
-    _items = cached.items;
-    _photoUrlsByCollectibleId = cached.photoUrlsByCollectibleId;
-    _categoryStats = cached.categoryStats;
-    _totalCount = cached.totalCount;
-    _nextOffset = cached.nextOffset;
-    _hasMore = cached.hasMore;
-    _isRefreshingResults = false;
-    _isLoadingMore = false;
   }
 
   @override
   Widget build(BuildContext context) {
-    return CustomScrollView(
-      controller: _scrollController,
-      slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md,
-              AppSpacing.md,
-              AppSpacing.md,
-              AppSpacing.lg,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Your Library',
-                  style: Theme.of(context).textTheme.headlineLarge,
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                CollectorSearchField(
-                  hintText: 'Search title, category, brand, series, or tags...',
-                  fillColor: AppColors.surfaceContainerHighest.withValues(
-                    alpha: 0.78,
-                  ),
-                  controller: _searchController,
-                  focusNode: _searchFocusNode,
-                  readOnly: false,
-                  onChanged: (_) {},
-                  suffixIcon: _query.isEmpty
-                      ? null
-                      : IconButton(
-                          onPressed: () => _searchController.clear(),
-                          icon: const Icon(Icons.close_rounded),
-                          color: AppColors.onSurfaceVariant,
-                        ),
-                ),
-                if (_hasActiveRefinementState) ...[
-                  const SizedBox(height: AppSpacing.md),
-                  _ActiveBrowseStrip(
-                    sortLabel: _sort.label,
-                    showSortChip: _sort != _LibrarySortOption.newest,
-                    favoritesOnly: _favoritesOnly,
-                    grailsOnly: _grailsOnly,
-                    duplicatesOnly: _duplicatesOnly,
-                    hasPhotoOnly: _hasPhotoOnly,
-                    onClearSort: () {
-                      setState(() {
-                        _sort = _LibrarySortOption.newest;
-                      });
-                      _refreshResults(resetScroll: true);
-                    },
-                    onClearFavorites: () {
-                      setState(() {
-                        _favoritesOnly = false;
-                      });
-                      _refreshResults(resetScroll: true);
-                    },
-                    onClearGrails: () {
-                      setState(() {
-                        _grailsOnly = false;
-                      });
-                      _refreshResults(resetScroll: true);
-                    },
-                    onClearDuplicates: () {
-                      setState(() {
-                        _duplicatesOnly = false;
-                      });
-                      _refreshResults(resetScroll: true);
-                    },
-                    onClearHasPhoto: () {
-                      setState(() {
-                        _hasPhotoOnly = false;
-                      });
-                      _refreshResults(resetScroll: true);
-                    },
-                    onClearAll: _clearAllBrowseState,
-                  ),
-                ],
-                const SizedBox(height: AppSpacing.md),
-                _CategoryShelf(
-                  categories: _categoryStats,
-                  selectedCategory: _selectedCategory,
-                  sortHighlighted: _sort != _LibrarySortOption.newest,
-                  filterHighlighted: _activeFilterCount > 0,
-                  onSortTap: _openSortSheet,
-                  onFilterTap: _openFilterSheet,
-                  onSelected: (category) {
-                    setState(() {
-                      _selectedCategory = _selectedCategory == category
-                          ? null
-                          : category;
-                    });
-                    _refreshResults(resetScroll: true);
-                  },
-                ),
-                if (_isRefreshingResults) ...[
-                  const SizedBox(height: AppSpacing.md),
-                  const _InlineLibraryLoader(label: 'Refreshing library...'),
-                ] else if (_items.isEmpty) ...[
-                  const SizedBox(height: AppSpacing.md),
-                  _LibraryNoResultsPanel(onClearAll: _clearAllBrowseState),
-                ],
-              ],
-            ),
-          ),
-        ),
-        if (_items.isNotEmpty)
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md,
-              0,
-              AppSpacing.md,
-              140,
-            ),
-            sliver: SliverGrid(
-              delegate: SliverChildBuilderDelegate((context, index) {
-                final collectible = _items[index];
-                final id = collectible.id;
-                final photoUrl = id == null
-                    ? null
-                    : _photoUrlsByCollectibleId[id];
+    return StreamBuilder<ArchiveLibraryPage>(
+      stream: _stream,
+      builder: (context, snapshot) {
+        final data = snapshot.data;
 
-                return CollectibleGridCard(
-                  collectible: collectible,
-                  photoUrl: photoUrl,
-                  onCollectionChanged: widget.onCollectionChanged,
-                  onCollectibleUpdated: _handleCollectibleUpdated,
-                );
-              }, childCount: _items.length),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: AppSpacing.md,
-                mainAxisSpacing: AppSpacing.md,
-                childAspectRatio: 0.72,
+        if (snapshot.hasError && data == null) {
+          return _CollectionLibraryErrorState(
+            onRetry: widget.onCollectionChanged,
+          );
+        }
+
+        if (data == null) {
+          return const _CollectionLibraryLoadingState();
+        }
+
+        _knownResultCount = data.totalCount;
+        _isExpandingVisibleItems = false;
+
+        final categories = data.categoryStats
+            .map(
+              (entry) => _CategoryShelfStat(
+                category: entry.category,
+                count: entry.count,
+              ),
+            )
+            .toList(growable: false);
+        final isCollectionEmpty =
+            data.totalCount == 0 && _hasDefaultBrowseState;
+
+        if (isCollectionEmpty) {
+          return const _CollectionLibraryEmptyState();
+        }
+
+        return CustomScrollView(
+          controller: _scrollController,
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md,
+                  AppSpacing.md,
+                  AppSpacing.md,
+                  AppSpacing.lg,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Your Library',
+                      style: Theme.of(context).textTheme.headlineLarge,
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    CollectorSearchField(
+                      hintText:
+                          'Search title, category, brand, series, or tags...',
+                      fillColor: AppColors.surfaceContainerHighest.withValues(
+                        alpha: 0.78,
+                      ),
+                      controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      readOnly: false,
+                      onChanged: (_) {},
+                      suffixIcon: _query.isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () => _searchController.clear(),
+                              icon: const Icon(Icons.close_rounded),
+                              color: AppColors.onSurfaceVariant,
+                            ),
+                    ),
+                    if (_hasActiveRefinementState) ...[
+                      const SizedBox(height: AppSpacing.md),
+                      _ActiveBrowseStrip(
+                        sortLabel: _sort.label,
+                        showSortChip: _sort != _LibrarySortOption.newest,
+                        favoritesOnly: _favoritesOnly,
+                        grailsOnly: _grailsOnly,
+                        duplicatesOnly: _duplicatesOnly,
+                        hasPhotoOnly: _hasPhotoOnly,
+                        onClearSort: () {
+                          setState(() {
+                            _sort = _LibrarySortOption.newest;
+                            _resetVisibleItems();
+                            _stream = _buildStream();
+                          });
+                        },
+                        onClearFavorites: () {
+                          setState(() {
+                            _favoritesOnly = false;
+                            _resetVisibleItems();
+                            _stream = _buildStream();
+                          });
+                        },
+                        onClearGrails: () {
+                          setState(() {
+                            _grailsOnly = false;
+                            _resetVisibleItems();
+                            _stream = _buildStream();
+                          });
+                        },
+                        onClearDuplicates: () {
+                          setState(() {
+                            _duplicatesOnly = false;
+                            _resetVisibleItems();
+                            _stream = _buildStream();
+                          });
+                        },
+                        onClearHasPhoto: () {
+                          setState(() {
+                            _hasPhotoOnly = false;
+                            _resetVisibleItems();
+                            _stream = _buildStream();
+                          });
+                        },
+                        onClearAll: _clearAllBrowseState,
+                      ),
+                    ],
+                    const SizedBox(height: AppSpacing.md),
+                    _LibraryBrowseControls(
+                      categories: categories,
+                      totalCount: data.totalCount,
+                      selectedCategory: _selectedCategory,
+                      sortHighlighted: _sort != _LibrarySortOption.newest,
+                      filterHighlighted: _activeFilterCount > 0,
+                      viewMode: _viewMode,
+                      onScopeTap: () => _openScopeSheet(
+                        categories: categories,
+                        totalCount: data.totalCount,
+                      ),
+                      onViewModeChanged: (viewMode) {
+                        setState(() {
+                          _viewMode = viewMode;
+                        });
+                      },
+                      onSortTap: _openSortSheet,
+                      onFilterTap: _openFilterSheet,
+                    ),
+                    if (data.items.isEmpty) ...[
+                      const SizedBox(height: AppSpacing.md),
+                      _LibraryNoResultsPanel(onClearAll: _clearAllBrowseState),
+                    ],
+                  ],
+                ),
               ),
             ),
-          ),
-        if (_items.isNotEmpty && _isLoadingMore)
-          const SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                AppSpacing.md,
-                AppSpacing.md,
-                AppSpacing.md,
-                140,
+            if (data.items.isNotEmpty)
+              if (_viewMode == _LibraryViewMode.grid)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    0,
+                    AppSpacing.md,
+                    140,
+                  ),
+                  sliver: SliverGrid(
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      final collectible = data.items[index];
+                      final id = collectible.id;
+                      final photoRef = id == null
+                          ? null
+                          : data.photoRefsByCollectibleId[id];
+
+                      return CollectibleGridCard(
+                        collectible: collectible,
+                        photoRef: photoRef,
+                        onCollectionChanged: widget.onCollectionChanged,
+                      );
+                    }, childCount: data.items.length),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: AppSpacing.sm,
+                          mainAxisSpacing: AppSpacing.md,
+                          childAspectRatio: 0.72,
+                        ),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    0,
+                    AppSpacing.md,
+                    140,
+                  ),
+                  sliver: SliverList.separated(
+                    itemCount: data.items.length,
+                    separatorBuilder: (_, _) =>
+                        const SizedBox(height: AppSpacing.xs),
+                    itemBuilder: (context, index) {
+                      final collectible = data.items[index];
+                      final id = collectible.id;
+                      final photoRef = id == null
+                          ? null
+                          : data.photoRefsByCollectibleId[id];
+
+                      return CollectibleListCard(
+                        collectible: collectible,
+                        photoRef: photoRef,
+                        onCollectionChanged: widget.onCollectionChanged,
+                      );
+                    },
+                  ),
+                ),
+            if (data.items.isNotEmpty && data.hasMore)
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    AppSpacing.md,
+                    AppSpacing.md,
+                    140,
+                  ),
+                  child: _InlineLibraryLoader(label: 'Scroll to load more...'),
+                ),
               ),
-              child: _InlineLibraryLoader(label: 'Loading more...'),
-            ),
-          ),
-      ],
+          ],
+        );
+      },
     );
   }
 }
@@ -748,38 +552,56 @@ extension on _LibrarySortOption {
   };
 }
 
-class _CategoryShelf extends StatelessWidget {
-  const _CategoryShelf({
+class _LibraryBrowseControls extends StatelessWidget {
+  const _LibraryBrowseControls({
     required this.categories,
+    required this.totalCount,
     required this.selectedCategory,
     required this.sortHighlighted,
     required this.filterHighlighted,
+    required this.viewMode,
+    required this.onScopeTap,
+    required this.onViewModeChanged,
     required this.onSortTap,
     required this.onFilterTap,
-    required this.onSelected,
   });
 
   final List<_CategoryShelfStat> categories;
+  final int totalCount;
   final String? selectedCategory;
   final bool sortHighlighted;
   final bool filterHighlighted;
+  final _LibraryViewMode viewMode;
+  final VoidCallback onScopeTap;
+  final ValueChanged<_LibraryViewMode> onViewModeChanged;
   final VoidCallback onSortTap;
   final VoidCallback onFilterTap;
-  final ValueChanged<String> onSelected;
 
   @override
   Widget build(BuildContext context) {
+    final selectedLabel = selectedCategory ?? 'All Items';
+    final selectedCount = selectedCategory == null
+        ? totalCount
+        : _countForCategory(categories, selectedCategory!);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
             Expanded(
-              child: Text(
-                'Browse by category',
-                style: Theme.of(context).textTheme.titleMedium,
+              child: _LibraryScopeButton(
+                label: selectedLabel,
+                count: selectedCount,
+                onTap: onScopeTap,
               ),
             ),
+            const SizedBox(width: AppSpacing.sm),
+            _LibraryViewToggle(
+              viewMode: viewMode,
+              onChanged: onViewModeChanged,
+            ),
+            const SizedBox(width: AppSpacing.xs),
             _LibraryUtilityIconButton(
               icon: Icons.swap_vert_rounded,
               highlighted: sortHighlighted,
@@ -795,39 +617,20 @@ class _CategoryShelf extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: AppSpacing.sm),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (final category in categories.take(8)) ...[
-                _CategoryShelfChip(
-                  category: category.category,
-                  count: category.count,
-                  active: selectedCategory == category.category,
-                  onTap: () => onSelected(category.category),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-              ],
-            ],
-          ),
-        ),
       ],
     );
   }
 }
 
-class _CategoryShelfChip extends StatelessWidget {
-  const _CategoryShelfChip({
-    required this.category,
+class _LibraryScopeButton extends StatelessWidget {
+  const _LibraryScopeButton({
+    required this.label,
     required this.count,
-    required this.active,
     required this.onTap,
   });
 
-  final String category;
+  final String label;
   final int count;
-  final bool active;
   final VoidCallback onTap;
 
   @override
@@ -836,35 +639,46 @@ class _CategoryShelfChip extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        borderRadius: BorderRadius.circular(18),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
           decoration: BoxDecoration(
-            color: active
-                ? AppColors.primary.withValues(alpha: 0.14)
-                : AppColors.surfaceContainerHighest.withValues(alpha: 0.62),
-            borderRadius: BorderRadius.circular(20),
+            color: AppColors.surfaceContainerHighest.withValues(alpha: 0.36),
+            borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: active
-                  ? AppColors.primary.withValues(alpha: 0.28)
-                  : AppColors.outlineVariant.withValues(alpha: 0.2),
+              color: AppColors.outlineVariant.withValues(alpha: 0.22),
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
-              Text(
-                category,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: active ? AppColors.primary : AppColors.onSurface,
+              Icon(
+                Icons.collections_bookmark_outlined,
+                size: 18,
+                color: AppColors.primary,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(color: AppColors.onSurface),
                 ),
               ),
-              const SizedBox(height: 2),
+              const SizedBox(width: AppSpacing.xs),
               Text(
-                '$count item${count == 1 ? '' : 's'}',
-                style: Theme.of(context).textTheme.bodySmall,
+                '$count',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 18,
+                color: AppColors.onSurfaceVariant,
               ),
             ],
           ),
@@ -976,6 +790,87 @@ class _LibraryNoResultsPanel extends StatelessWidget {
   }
 }
 
+class _LibraryViewToggle extends StatelessWidget {
+  const _LibraryViewToggle({required this.viewMode, required this.onChanged});
+
+  final _LibraryViewMode viewMode;
+  final ValueChanged<_LibraryViewMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.24),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _LibraryViewToggleButton(
+            icon: Icons.grid_view_rounded,
+            selected: viewMode == _LibraryViewMode.grid,
+            tooltip: 'Grid view',
+            onTap: () => onChanged(_LibraryViewMode.grid),
+          ),
+          _LibraryViewToggleButton(
+            icon: Icons.view_list_rounded,
+            selected: viewMode == _LibraryViewMode.list,
+            tooltip: 'List view',
+            onTap: () => onChanged(_LibraryViewMode.list),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LibraryViewToggleButton extends StatelessWidget {
+  const _LibraryViewToggleButton({
+    required this.icon,
+    required this.selected,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final bool selected;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(13),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.16)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(13),
+          ),
+          child: Icon(
+            icon,
+            size: 17,
+            color: selected ? AppColors.primary : AppColors.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _LibraryUtilityIconButton extends StatelessWidget {
   const _LibraryUtilityIconButton({
     required this.highlighted,
@@ -1040,6 +935,192 @@ class _LibraryFilterSelection {
   final bool grailsOnly;
   final bool duplicatesOnly;
   final bool hasPhotoOnly;
+}
+
+class _LibraryBrowseScope {
+  const _LibraryBrowseScope({required this.label, required this.category});
+
+  final String label;
+  final String? category;
+}
+
+const _libraryBrowseScopes = <_LibraryBrowseScope>[
+  _LibraryBrowseScope(label: 'All Items', category: null),
+  _LibraryBrowseScope(label: 'Action Figures', category: 'Action Figures'),
+  _LibraryBrowseScope(label: 'Comics', category: 'Comics'),
+  _LibraryBrowseScope(label: 'Board Games', category: 'Board Games'),
+  _LibraryBrowseScope(label: 'Statues', category: 'Statues'),
+  _LibraryBrowseScope(label: 'Vinyl Figures', category: 'Vinyl Figures'),
+  _LibraryBrowseScope(label: 'Other', category: 'Other'),
+];
+
+class _LibraryScopeSheet extends StatelessWidget {
+  const _LibraryScopeSheet({
+    required this.selectedCategory,
+    required this.categories,
+    required this.totalCount,
+  });
+
+  final String? selectedCategory;
+  final List<_CategoryShelfStat> categories;
+  final int totalCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.surfaceContainerHigh,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.md,
+            AppSpacing.lg,
+            AppSpacing.lg,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.outlineVariant.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                Text(
+                  'Browse Scope',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  'Choose the shelf you want to browse. Filters and sorting stay available above the collection.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                for (final scope in _libraryBrowseScopes) ...[
+                  _LibraryScopeOptionRow(
+                    scope: scope,
+                    count: scope.category == null
+                        ? totalCount
+                        : _countForCategory(categories, scope.category!),
+                    selected: scope.category == selectedCategory,
+                    onTap: () => Navigator.of(context).pop(scope),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LibraryScopeOptionRow extends StatelessWidget {
+  const _LibraryScopeOptionRow({
+    required this.scope,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _LibraryBrowseScope scope;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(22),
+        child: Ink(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.12)
+                : AppColors.surfaceContainerHighest.withValues(alpha: 0.34),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.28)
+                  : AppColors.outlineVariant.withValues(alpha: 0.22),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? AppColors.primary.withValues(alpha: 0.16)
+                      : AppColors.surfaceContainerHighest.withValues(
+                          alpha: 0.5,
+                        ),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  scope.category == null
+                      ? Icons.inventory_2_outlined
+                      : Icons.category_outlined,
+                  color: selected
+                      ? AppColors.primary
+                      : AppColors.onSurfaceVariant,
+                  size: 19,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      scope.label,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: selected
+                            ? AppColors.primary
+                            : AppColors.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$count item${count == 1 ? '' : 's'}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Icon(
+                selected ? Icons.check_circle_rounded : Icons.circle_outlined,
+                color: selected
+                    ? AppColors.primary
+                    : AppColors.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _AppliedBrowseChip extends StatelessWidget {
@@ -1558,45 +1639,19 @@ class _CollectionLibraryErrorState extends StatelessWidget {
   }
 }
 
-class _CollectionLibraryBootstrapData {
-  const _CollectionLibraryBootstrapData({
-    required this.initialPage,
-    required this.initialPhotoUrls,
-    required this.categoryStats,
-  });
-
-  final CollectiblePageResult initialPage;
-  final Map<String, String> initialPhotoUrls;
-  final List<_CategoryShelfStat> categoryStats;
-}
-
-class _CachedLibraryBrowseState {
-  _CachedLibraryBrowseState({
-    required this.items,
-    required this.photoUrlsByCollectibleId,
-    required this.categoryStats,
-    required this.totalCount,
-    required this.nextOffset,
-    required this.hasMore,
-    DateTime? createdAt,
-  }) : createdAt = createdAt ?? DateTime.now();
-
-  final List<CollectibleModel> items;
-  final Map<String, String> photoUrlsByCollectibleId;
-  final List<_CategoryShelfStat> categoryStats;
-  final int totalCount;
-  final int nextOffset;
-  final bool hasMore;
-  final DateTime createdAt;
-
-  bool hasExpiredPhotoUrls(Duration maxAge) {
-    return DateTime.now().difference(createdAt) > maxAge;
-  }
-}
-
 class _CategoryShelfStat {
   const _CategoryShelfStat({required this.category, required this.count});
 
   final String category;
   final int count;
+}
+
+int _countForCategory(List<_CategoryShelfStat> categories, String category) {
+  for (final stat in categories) {
+    if (stat.category.trim().toLowerCase() == category.trim().toLowerCase()) {
+      return stat.count;
+    }
+  }
+
+  return 0;
 }

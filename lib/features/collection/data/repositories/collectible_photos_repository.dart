@@ -5,11 +5,17 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/data/json_map.dart';
+import '../../../../core/data/local_archive_database.dart';
+import '../../../../core/data/photo_cache_store.dart';
 import '../../../../core/data/supabase_repository.dart';
 import '../models/collectible_photo_model.dart';
 
 class CollectiblePhotosRepository extends SupabaseRepository {
   CollectiblePhotosRepository({super.client});
+
+  static final LocalArchiveDatabase _localDatabase =
+      LocalArchiveDatabase.instance;
+  static final PhotoCacheStore _photoCacheStore = PhotoCacheStore.instance;
 
   Future<CollectiblePhotoModel> uploadPrimaryPhoto({
     required String collectibleId,
@@ -17,6 +23,7 @@ class CollectiblePhotosRepository extends SupabaseRepository {
     required String originalFileName,
     String? caption,
   }) async {
+    await ensureOnlineForWrite();
     final storagePath = buildPrimaryStoragePath(
       userId: currentUserId,
       collectibleId: collectibleId,
@@ -33,7 +40,7 @@ class CollectiblePhotosRepository extends SupabaseRepository {
         );
 
     try {
-      return await create(
+      final created = await create(
         CollectiblePhotoModel(
           collectibleId: collectibleId,
           storagePath: storagePath,
@@ -42,6 +49,12 @@ class CollectiblePhotosRepository extends SupabaseRepository {
           displayOrder: 0,
         ),
       );
+      await _photoCacheStore.seedPrimaryPhotoFromFile(
+        userId: currentUserId,
+        photo: created,
+        sourcePath: localImagePath,
+      );
+      return created;
     } catch (_) {
       await _removeUploadedObject(storagePath);
       rethrow;
@@ -54,6 +67,7 @@ class CollectiblePhotosRepository extends SupabaseRepository {
     required String originalFileName,
     String? caption,
   }) async {
+    await ensureOnlineForWrite();
     await deleteAllForCollectible(collectibleId);
 
     return uploadPrimaryPhoto(
@@ -70,6 +84,7 @@ class CollectiblePhotosRepository extends SupabaseRepository {
     required String fallbackFileName,
     String? caption,
   }) async {
+    await ensureOnlineForWrite();
     final response = await http.get(Uri.parse(imageUrl));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw const StorageException('Could not download the suggested image.');
@@ -83,13 +98,19 @@ class CollectiblePhotosRepository extends SupabaseRepository {
       contentType: contentType,
     );
 
-    return uploadPrimaryPhotoBytes(
+    final created = await uploadPrimaryPhotoBytes(
       collectibleId: collectibleId,
       imageBytes: response.bodyBytes,
       originalFileName: fileName,
       contentType: contentType,
       caption: caption,
     );
+    await _photoCacheStore.seedPrimaryPhotoFromBytes(
+      userId: currentUserId,
+      photo: created,
+      bytes: response.bodyBytes,
+    );
+    return created;
   }
 
   Future<CollectiblePhotoModel> uploadPrimaryPhotoBytes({
@@ -99,6 +120,7 @@ class CollectiblePhotosRepository extends SupabaseRepository {
     String? contentType,
     String? caption,
   }) async {
+    await ensureOnlineForWrite();
     final storagePath = buildPrimaryStoragePath(
       userId: currentUserId,
       collectibleId: collectibleId,
@@ -117,7 +139,7 @@ class CollectiblePhotosRepository extends SupabaseRepository {
         );
 
     try {
-      return await create(
+      final created = await create(
         CollectiblePhotoModel(
           collectibleId: collectibleId,
           storagePath: storagePath,
@@ -126,6 +148,12 @@ class CollectiblePhotosRepository extends SupabaseRepository {
           displayOrder: 0,
         ),
       );
+      await _photoCacheStore.seedPrimaryPhotoFromBytes(
+        userId: currentUserId,
+        photo: created,
+        bytes: imageBytes,
+      );
+      return created;
     } catch (_) {
       await _removeUploadedObject(storagePath);
       rethrow;
@@ -232,16 +260,20 @@ class CollectiblePhotosRepository extends SupabaseRepository {
   }
 
   Future<CollectiblePhotoModel> create(CollectiblePhotoModel photo) async {
+    await ensureOnlineForWrite();
     final data = await client
         .from('collectible_photos')
         .insert(photo.toInsertJson())
         .select()
         .single();
 
-    return CollectiblePhotoModel.fromJson(asJsonMap(data));
+    final created = CollectiblePhotoModel.fromJson(asJsonMap(data));
+    await _localDatabase.upsertPhoto(created, currentUserId);
+    return created;
   }
 
   Future<CollectiblePhotoModel> update(CollectiblePhotoModel photo) async {
+    await ensureOnlineForWrite();
     final id = photo.id;
     if (id == null) {
       throw ArgumentError('Collectible photo id is required for updates.');
@@ -254,14 +286,19 @@ class CollectiblePhotosRepository extends SupabaseRepository {
         .select()
         .single();
 
-    return CollectiblePhotoModel.fromJson(asJsonMap(data));
+    final updated = CollectiblePhotoModel.fromJson(asJsonMap(data));
+    await _localDatabase.upsertPhoto(updated, currentUserId);
+    return updated;
   }
 
   Future<void> delete(String id) async {
+    await ensureOnlineForWrite();
     await client.from('collectible_photos').delete().eq('id', id);
+    await _localDatabase.deletePhotoCacheEntry(id);
   }
 
   Future<void> deleteAllForCollectible(String collectibleId) async {
+    await ensureOnlineForWrite();
     final photos = await fetchByCollectibleId(collectibleId);
     if (photos.isEmpty) {
       return;
@@ -294,6 +331,12 @@ class CollectiblePhotosRepository extends SupabaseRepository {
         .from('collectible_photos')
         .delete()
         .eq('collectible_id', collectibleId);
+    await _localDatabase.replacePhotosForCollectible(
+      currentUserId,
+      collectibleId,
+      const [],
+    );
+    await _photoCacheStore.removeForCollectible(currentUserId, collectibleId);
   }
 
   Future<void> _removeUploadedObject(String storagePath) async {

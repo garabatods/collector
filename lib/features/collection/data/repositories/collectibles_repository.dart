@@ -1,4 +1,5 @@
 import '../../../../core/data/json_map.dart';
+import '../../../../core/data/local_archive_database.dart';
 import '../../../../core/data/supabase_repository.dart';
 import '../models/collectible_model.dart';
 import 'tags_repository.dart';
@@ -7,6 +8,8 @@ class CollectiblesRepository extends SupabaseRepository {
   CollectiblesRepository({super.client});
 
   static const libraryDefaultPageSize = 24;
+  static final LocalArchiveDatabase _localDatabase =
+      LocalArchiveDatabase.instance;
 
   TagsRepository get _tagsRepository => TagsRepository(client: client);
 
@@ -134,6 +137,7 @@ class CollectiblesRepository extends SupabaseRepository {
     Iterable<String>? tagIds,
     Iterable<String>? newTagNames,
   }) async {
+    await ensureOnlineForWrite();
     final data = await client
         .from('collectibles')
         .insert(collectible.toInsertJson(userId: currentUserId))
@@ -147,6 +151,7 @@ class CollectiblesRepository extends SupabaseRepository {
     }
 
     if (tagIds == null && newTagNames == null) {
+      await _localDatabase.upsertCollectible(created, currentUserId);
       return created;
     }
 
@@ -156,7 +161,14 @@ class CollectiblesRepository extends SupabaseRepository {
       newTagNames: newTagNames ?? const [],
     );
 
-    return created.copyWith(tags: tags);
+    final hydrated = created.copyWith(tags: tags);
+    await _localDatabase.upsertCollectible(hydrated, currentUserId);
+    await _localDatabase.replaceCollectibleTags(
+      userId: currentUserId,
+      collectibleId: createdId,
+      tags: tags,
+    );
+    return hydrated;
   }
 
   Future<CollectibleModel> update(
@@ -164,6 +176,7 @@ class CollectiblesRepository extends SupabaseRepository {
     Iterable<String>? tagIds,
     Iterable<String>? newTagNames,
   }) async {
+    await ensureOnlineForWrite();
     final id = collectible.id;
     if (id == null) {
       throw ArgumentError('Collectible id is required for updates.');
@@ -179,7 +192,9 @@ class CollectiblesRepository extends SupabaseRepository {
 
     final updated = CollectibleModel.fromJson(asJsonMap(data));
     if (tagIds == null && newTagNames == null) {
-      return updated.copyWith(tags: collectible.tags);
+      final hydrated = updated.copyWith(tags: collectible.tags);
+      await _localDatabase.upsertCollectible(hydrated, currentUserId);
+      return hydrated;
     }
 
     final tags = await _tagsRepository.syncCollectibleTags(
@@ -188,15 +203,24 @@ class CollectiblesRepository extends SupabaseRepository {
       newTagNames: newTagNames ?? const [],
     );
 
-    return updated.copyWith(tags: tags);
+    final hydrated = updated.copyWith(tags: tags);
+    await _localDatabase.upsertCollectible(hydrated, currentUserId);
+    await _localDatabase.replaceCollectibleTags(
+      userId: currentUserId,
+      collectibleId: id,
+      tags: tags,
+    );
+    return hydrated;
   }
 
   Future<void> delete(String id) async {
+    await ensureOnlineForWrite();
     await client
         .from('collectibles')
         .delete()
         .eq('id', id)
         .eq('user_id', currentUserId);
+    await _localDatabase.deleteCollectible(currentUserId, id);
   }
 
   Future<List<CollectibleModel>> _withTags(

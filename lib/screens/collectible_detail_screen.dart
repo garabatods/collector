@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../core/data/archive_types.dart';
 import '../features/collection/data/models/collectible_model.dart';
 import '../features/collection/data/repositories/collectible_photos_repository.dart';
 import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/archive_photo_view.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_chip.dart';
 import '../widgets/collector_panel.dart';
@@ -17,11 +19,11 @@ class CollectibleDetailScreen extends StatefulWidget {
   const CollectibleDetailScreen({
     super.key,
     required this.collectible,
-    this.photoUrl,
+    this.photoRef,
   });
 
   final CollectibleModel collectible;
-  final String? photoUrl;
+  final ArchivePhotoRef? photoRef;
 
   @override
   State<CollectibleDetailScreen> createState() =>
@@ -39,7 +41,7 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
       MaterialPageRoute<bool>(
         builder: (_) => ManualAddCollectibleScreen(
           collectible: widget.collectible,
-          existingPhotoUrl: widget.photoUrl,
+          existingPhotoUrl: widget.photoRef?.remoteUrl ?? widget.photoRef?.localPath,
         ),
       ),
     );
@@ -255,7 +257,7 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
                         const SizedBox(height: AppSpacing.lg),
                         _DetailHero(
                           collectible: collectible,
-                          photoUrl: widget.photoUrl,
+                          photoRef: widget.photoRef,
                           isComic: isComic,
                         ),
                       ],
@@ -376,12 +378,12 @@ enum _DetailAction { edit, delete }
 class _DetailHero extends StatelessWidget {
   const _DetailHero({
     required this.collectible,
-    required this.photoUrl,
+    required this.photoRef,
     required this.isComic,
   });
 
   final CollectibleModel collectible;
-  final String? photoUrl;
+  final ArchivePhotoRef? photoRef;
   final bool isComic;
 
   @override
@@ -416,8 +418,10 @@ class _DetailHero extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (photoUrl == null)
-                    DecoratedBox(
+                  ArchivePhotoView(
+                    photoRef: photoRef,
+                    fit: BoxFit.cover,
+                    placeholder: DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
@@ -436,32 +440,28 @@ class _DetailHero extends StatelessWidget {
                           size: 54,
                         ),
                       ),
-                    )
-                  else
-                    Image.network(
-                      photoUrl!,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              accentColor.withValues(alpha: 0.34),
-                              secondaryAccent.withValues(alpha: 0.24),
-                              AppColors.surfaceContainerHighest,
-                            ],
-                          ),
+                    ),
+                    error: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            accentColor.withValues(alpha: 0.34),
+                            secondaryAccent.withValues(alpha: 0.24),
+                            AppColors.surfaceContainerHighest,
+                          ],
                         ),
-                        child: const Center(
-                          child: Icon(
-                            Icons.broken_image_outlined,
-                            color: AppColors.onSurfaceVariant,
-                            size: 54,
-                          ),
+                      ),
+                      child: const Center(
+                        child: Icon(
+                          Icons.broken_image_outlined,
+                          color: AppColors.onSurfaceVariant,
+                          size: 54,
                         ),
                       ),
                     ),
+                  ),
                   DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
