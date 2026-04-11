@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 abstract final class AppColors {
   static const background = Color(0xFF0B0E14);
-  static const onBackground = Color(0xFFECEDF6);
   static const white = Color(0xFFFFFFFF);
 
   static const surface = Color(0xFF0B0E14);
@@ -13,7 +12,6 @@ abstract final class AppColors {
   static const surfaceContainer = Color(0xFF161A21);
   static const surfaceContainerHigh = Color(0xFF1C2028);
   static const surfaceContainerHighest = Color(0xFF22262F);
-  static const surfaceVariant = Color(0xFF22262F);
 
   static const primary = Color(0xFFA3A6FF);
   static const primaryDim = Color(0xFF6063EE);
@@ -45,19 +43,13 @@ abstract final class AppColors {
   static const warning = Color(0xFFF59E0B);
   static const dashboardGlow = Color(0xFF161C35);
   static const featureGlow = Color(0xFF171C34);
-  static const componentLibraryGlow = Color(0xFF171C32);
+  static const aiPhotoGlow = Color(0xFF171C32);
   static const authGlow = Color(0x14171C35);
   static const splashGlow = Color(0x26242A6B);
-  static const searchFieldFill = Color(0x12FFFFFF);
-  static const searchFieldForeground = Color(0xFF9D9D9D);
   static const softShadow = Color(0x16000000);
   static const primaryShadow = Color(0x336063EE);
   static const primaryShadowStrong = Color(0x4D6063EE);
   static const primaryShadowHalo = Color(0x526063EE);
-  static const exhibitionHeroStart = Color(0xFF242A6B);
-  static const exhibitionHeroMid = Color(0xFF4A1F4F);
-  static const exhibitionGridStart = Color(0xFF6A143A);
-  static const exhibitionGridEnd = Color(0xFF20263A);
   static const categoryRoseBackground = Color(0x1AA80619);
   static const categoryRoseBorder = Color(0x33FFA5D9);
   static const categoryRoseForeground = Color(0xFFFFA5D9);
@@ -80,37 +72,6 @@ abstract final class AppColors {
   static const primaryGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [
-      primaryDim,
-      primary,
-    ],
-  );
-
-  static const heroGradient = LinearGradient(
-    begin: Alignment.topCenter,
-    end: Alignment.bottomCenter,
-    colors: [
-      Color(0x0010131A),
-      Color(0xCC0B0E14),
-    ],
-  );
-
-  static const exhibitionHeroGradient = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [
-      exhibitionHeroStart,
-      exhibitionHeroMid,
-      background,
-    ],
-  );
-
-  static const exhibitionGridGradient = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [
-      exhibitionGridStart,
-      exhibitionGridEnd,
-    ],
+    colors: [primaryDim, primary],
   );
 }

@@ -7,9 +7,10 @@ import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_photo_view.dart';
-import '../widgets/collector_button.dart';
 import '../widgets/collector_chip.dart';
 import '../widgets/collector_panel.dart';
+import '../widgets/collector_snack_bar.dart';
+import '../widgets/collector_sticky_back_button.dart';
 import 'manual_add_collectible_screen.dart';
 
 const _detailHeaderBottomSpacing = AppSpacing.xl;
@@ -41,7 +42,8 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
       MaterialPageRoute<bool>(
         builder: (_) => ManualAddCollectibleScreen(
           collectible: widget.collectible,
-          existingPhotoUrl: widget.photoRef?.remoteUrl ?? widget.photoRef?.localPath,
+          existingPhotoUrl:
+              widget.photoRef?.remoteUrl ?? widget.photoRef?.localPath,
         ),
       ),
     );
@@ -101,18 +103,20 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
 
       final messenger = ScaffoldMessenger.of(context);
       Navigator.of(context).pop(true);
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Collectible removed.')),
+      CollectorSnackBar.showOn(
+        messenger,
+        message: 'Removed from collection.',
+        tone: CollectorSnackBarTone.success,
       );
     } catch (_) {
       if (!mounted) {
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not delete this collectible right now.'),
-        ),
+      CollectorSnackBar.show(
+        context,
+        message: 'Could not remove this item right now.',
+        tone: CollectorSnackBarTone.error,
       );
     } finally {
       if (mounted) {
@@ -149,10 +153,10 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
         _collectorStatusText(collectible.itemCondition),
       ),
       if (!isComic)
-      ...?_fieldAsList(
-        'Box status',
-        _collectorStatusText(collectible.boxStatus),
-      ),
+        ...?_fieldAsList(
+          'Box status',
+          _collectorStatusText(collectible.boxStatus),
+        ),
       ...?_fieldAsList('Cost', purchasePriceText),
       ...?_fieldAsList('Acquired', _formatDate(collectible.acquiredOn)),
     ];
@@ -195,12 +199,7 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
                       children: [
                         Row(
                           children: [
-                            CollectorButton(
-                              label: 'Back',
-                              onPressed: () => Navigator.of(context).pop(),
-                              variant: CollectorButtonVariant.icon,
-                              icon: Icons.arrow_back_rounded,
-                            ),
+                            const SizedBox(width: 48, height: 48),
                             const Spacer(),
                             PopupMenuButton<_DetailAction>(
                               enabled: !_isDeleting,
@@ -366,6 +365,9 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
                 ),
               ],
             ),
+          ),
+          CollectorStickyBackButton(
+            onPressed: () => Navigator.of(context).pop(),
           ),
         ],
       ),
@@ -558,7 +560,9 @@ class _DetailHero extends StatelessWidget {
                       width: 88,
                       child: _HeroMetricCard(
                         label: 'Issue',
-                        value: _normalizedText(collectible.itemNumber) ?? 'Unknown',
+                        value:
+                            _normalizedText(collectible.itemNumber) ??
+                            'Unknown',
                         accentColor: accentColor,
                       ),
                     ),
@@ -690,9 +694,7 @@ class _SnapshotMetricsGrid extends StatelessWidget {
       ),
       _DetailField(
         label: 'Estimated value',
-        value:
-            _formatCurrency(collectible.estimatedValue) ??
-            'Not tracked',
+        value: _formatCurrency(collectible.estimatedValue) ?? 'Not tracked',
       ),
     ];
 
@@ -735,7 +737,7 @@ class _DetailFactGrid extends StatelessWidget {
         final itemWidth = columnCount == 1
             ? maxWidth
             : (maxWidth - ((columnCount - 1) * horizontalSpacing)) /
-                columnCount;
+                  columnCount;
 
         return Wrap(
           spacing: horizontalSpacing,
@@ -838,9 +840,7 @@ class _HeroMetricCard extends StatelessWidget {
             value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
               fontSize: 14,
               height: 1.05,
               color: accentColor,

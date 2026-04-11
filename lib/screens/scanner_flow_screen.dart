@@ -9,6 +9,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_panel.dart';
+import '../widgets/collector_sticky_back_button.dart';
 import 'ai_photo_identification_screen.dart';
 import 'manual_add_collectible_screen.dart';
 
@@ -261,16 +262,7 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      CollectorButton(
-                        label: 'Back',
-                        onPressed: () => Navigator.of(context).pop(),
-                        variant: CollectorButtonVariant.icon,
-                        icon: Icons.arrow_back_rounded,
-                      ),
-                    ],
-                  ),
+                  const SizedBox(height: 48),
                   const SizedBox(height: AppSpacing.sm),
                   Expanded(
                     child: CollectorPanel(
@@ -458,6 +450,9 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                 ],
               ),
             ),
+          ),
+          CollectorStickyBackButton(
+            onPressed: () => Navigator.of(context).pop(),
           ),
         ],
       ),

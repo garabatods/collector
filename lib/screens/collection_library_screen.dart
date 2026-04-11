@@ -6,6 +6,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/collector_button.dart';
+import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
@@ -175,32 +176,14 @@ class _CollectionLibraryLoadedStateState
     }
   }
 
-  Future<void> _openSortSheet() async {
-    final nextSort = await showModalBottomSheet<_LibrarySortOption>(
-      context: context,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _LibrarySortSheet(selected: _sort),
-    );
-
-    if (!mounted || nextSort == null || nextSort == _sort) {
-      return;
-    }
-
-    setState(() {
-      _sort = nextSort;
-      _resetVisibleItems();
-      _stream = _buildStream();
-    });
-  }
-
-  Future<void> _openFilterSheet() async {
-    final nextFilters = await showModalBottomSheet<_LibraryFilterSelection>(
+  Future<void> _openRefineSheet() async {
+    final nextRefinement = await showModalBottomSheet<_LibraryRefineSelection>(
       context: context,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (context) => _LibraryFilterSheet(
+      builder: (context) => _LibraryRefineSheet(
+        sort: _sort,
         favoritesOnly: _favoritesOnly,
         grailsOnly: _grailsOnly,
         duplicatesOnly: _duplicatesOnly,
@@ -208,15 +191,24 @@ class _CollectionLibraryLoadedStateState
       ),
     );
 
-    if (!mounted || nextFilters == null) {
+    if (!mounted || nextRefinement == null) {
+      return;
+    }
+
+    if (nextRefinement.sort == _sort &&
+        nextRefinement.favoritesOnly == _favoritesOnly &&
+        nextRefinement.grailsOnly == _grailsOnly &&
+        nextRefinement.duplicatesOnly == _duplicatesOnly &&
+        nextRefinement.hasPhotoOnly == _hasPhotoOnly) {
       return;
     }
 
     setState(() {
-      _favoritesOnly = nextFilters.favoritesOnly;
-      _grailsOnly = nextFilters.grailsOnly;
-      _duplicatesOnly = nextFilters.duplicatesOnly;
-      _hasPhotoOnly = nextFilters.hasPhotoOnly;
+      _sort = nextRefinement.sort;
+      _favoritesOnly = nextRefinement.favoritesOnly;
+      _grailsOnly = nextRefinement.grailsOnly;
+      _duplicatesOnly = nextRefinement.duplicatesOnly;
+      _hasPhotoOnly = nextRefinement.hasPhotoOnly;
       _resetVisibleItems();
       _stream = _buildStream();
     });
@@ -283,15 +275,6 @@ class _CollectionLibraryLoadedStateState
         !_hasPhotoOnly &&
         _selectedCategory == null &&
         _sort == _LibrarySortOption.newest;
-  }
-
-  int get _activeFilterCount {
-    var count = 0;
-    if (_favoritesOnly) count++;
-    if (_grailsOnly) count++;
-    if (_duplicatesOnly) count++;
-    if (_hasPhotoOnly) count++;
-    return count;
   }
 
   ArchiveLibrarySort get _archiveSort => switch (_sort) {
@@ -361,37 +344,45 @@ class _CollectionLibraryLoadedStateState
                   AppSpacing.md,
                   AppSpacing.md,
                   AppSpacing.md,
-                  AppSpacing.lg,
+                  AppSpacing.sm,
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Your Library',
-                      style: Theme.of(context).textTheme.headlineLarge,
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                    CollectorSearchField(
-                      hintText:
-                          'Search title, category, brand, series, or tags...',
-                      fillColor: AppColors.surfaceContainerHighest.withValues(
-                        alpha: 0.78,
-                      ),
-                      controller: _searchController,
-                      focusNode: _searchFocusNode,
-                      readOnly: false,
-                      onChanged: (_) {},
-                      suffixIcon: _query.isEmpty
-                          ? null
-                          : IconButton(
-                              onPressed: () => _searchController.clear(),
-                              icon: const Icon(Icons.close_rounded),
-                              color: AppColors.onSurfaceVariant,
-                            ),
-                    ),
-                    if (_hasActiveRefinementState) ...[
-                      const SizedBox(height: AppSpacing.md),
-                      _ActiveBrowseStrip(
+                child: Text(
+                  'Your Library',
+                  style: Theme.of(context).textTheme.headlineLarge,
+                ),
+              ),
+            ),
+            SliverAppBar(
+              pinned: true,
+              primary: false,
+              automaticallyImplyLeading: false,
+              toolbarHeight: _LibraryStickySearchHeader.heightFor(
+                _hasActiveRefinementState,
+              ),
+              backgroundColor: AppColors.background.withValues(alpha: 0.98),
+              surfaceTintColor: Colors.transparent,
+              shadowColor: Colors.black.withValues(alpha: 0.22),
+              elevation: 8,
+              flexibleSpace: _LibraryStickySearchHeader(
+                searchField: CollectorSearchField(
+                  hintText: 'Search title, category, brand, series, or tags...',
+                  fillColor: AppColors.surfaceContainerHighest.withValues(
+                    alpha: 0.78,
+                  ),
+                  controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  readOnly: false,
+                  onChanged: (_) {},
+                  suffixIcon: _query.isEmpty
+                      ? null
+                      : IconButton(
+                          onPressed: () => _searchController.clear(),
+                          icon: const Icon(Icons.close_rounded),
+                          color: AppColors.onSurfaceVariant,
+                        ),
+                ),
+                activeBrowseStrip: _hasActiveRefinementState
+                    ? _ActiveBrowseStrip(
                         sortLabel: _sort.label,
                         showSortChip: _sort != _LibrarySortOption.newest,
                         favoritesOnly: _favoritesOnly,
@@ -434,36 +425,41 @@ class _CollectionLibraryLoadedStateState
                           });
                         },
                         onClearAll: _clearAllBrowseState,
-                      ),
-                    ],
-                    const SizedBox(height: AppSpacing.md),
-                    _LibraryBrowseControls(
-                      categories: categories,
-                      totalCount: data.totalCount,
-                      selectedCategory: _selectedCategory,
-                      sortHighlighted: _sort != _LibrarySortOption.newest,
-                      filterHighlighted: _activeFilterCount > 0,
-                      viewMode: _viewMode,
-                      onScopeTap: () => _openScopeSheet(
-                        categories: categories,
-                        totalCount: data.totalCount,
-                      ),
-                      onViewModeChanged: (viewMode) {
-                        setState(() {
-                          _viewMode = viewMode;
-                        });
-                      },
-                      onSortTap: _openSortSheet,
-                      onFilterTap: _openFilterSheet,
-                    ),
-                    if (data.items.isEmpty) ...[
-                      const SizedBox(height: AppSpacing.md),
-                      _LibraryNoResultsPanel(onClearAll: _clearAllBrowseState),
-                    ],
-                  ],
+                      )
+                    : null,
+                browseControls: _LibraryBrowseControls(
+                  categories: categories,
+                  totalCount: data.totalCount,
+                  selectedCategory: _selectedCategory,
+                  refineHighlighted: _hasActiveRefinementState,
+                  viewMode: _viewMode,
+                  onScopeTap: () => _openScopeSheet(
+                    categories: categories,
+                    totalCount: data.totalCount,
+                  ),
+                  onViewModeChanged: (viewMode) {
+                    setState(() {
+                      _viewMode = viewMode;
+                    });
+                  },
+                  onRefineTap: _openRefineSheet,
                 ),
               ),
             ),
+            if (data.items.isEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    AppSpacing.md,
+                    AppSpacing.md,
+                    140,
+                  ),
+                  child: _LibraryNoResultsPanel(
+                    onClearAll: _clearAllBrowseState,
+                  ),
+                ),
+              ),
             if (data.items.isNotEmpty)
               if (_viewMode == _LibraryViewMode.grid)
                 SliverPadding(
@@ -552,30 +548,68 @@ extension on _LibrarySortOption {
   };
 }
 
+class _LibraryStickySearchHeader extends StatelessWidget {
+  const _LibraryStickySearchHeader({
+    required this.searchField,
+    required this.browseControls,
+    this.activeBrowseStrip,
+  });
+
+  final Widget searchField;
+  final Widget browseControls;
+  final Widget? activeBrowseStrip;
+
+  static double heightFor(bool hasActiveRefinementState) {
+    return hasActiveRefinementState ? 194 : 146;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activeBrowseStrip = this.activeBrowseStrip;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.xs,
+        AppSpacing.md,
+        AppSpacing.md,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          searchField,
+          if (activeBrowseStrip != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            activeBrowseStrip,
+          ],
+          const SizedBox(height: AppSpacing.sm),
+          browseControls,
+        ],
+      ),
+    );
+  }
+}
+
 class _LibraryBrowseControls extends StatelessWidget {
   const _LibraryBrowseControls({
     required this.categories,
     required this.totalCount,
     required this.selectedCategory,
-    required this.sortHighlighted,
-    required this.filterHighlighted,
+    required this.refineHighlighted,
     required this.viewMode,
     required this.onScopeTap,
     required this.onViewModeChanged,
-    required this.onSortTap,
-    required this.onFilterTap,
+    required this.onRefineTap,
   });
 
   final List<_CategoryShelfStat> categories;
   final int totalCount;
   final String? selectedCategory;
-  final bool sortHighlighted;
-  final bool filterHighlighted;
+  final bool refineHighlighted;
   final _LibraryViewMode viewMode;
   final VoidCallback onScopeTap;
   final ValueChanged<_LibraryViewMode> onViewModeChanged;
-  final VoidCallback onSortTap;
-  final VoidCallback onFilterTap;
+  final VoidCallback onRefineTap;
 
   @override
   Widget build(BuildContext context) {
@@ -603,17 +637,10 @@ class _LibraryBrowseControls extends StatelessWidget {
             ),
             const SizedBox(width: AppSpacing.xs),
             _LibraryUtilityIconButton(
-              icon: Icons.swap_vert_rounded,
-              highlighted: sortHighlighted,
-              tooltip: 'Sort library',
-              onTap: onSortTap,
-            ),
-            const SizedBox(width: AppSpacing.xs),
-            _LibraryUtilityIconButton(
               icon: Icons.tune_rounded,
-              highlighted: filterHighlighted,
-              tooltip: 'Filter library',
-              onTap: onFilterTap,
+              highlighted: refineHighlighted,
+              tooltip: 'Refine library',
+              onTap: onRefineTap,
             ),
           ],
         ),
@@ -923,14 +950,16 @@ class _LibraryUtilityIconButton extends StatelessWidget {
   }
 }
 
-class _LibraryFilterSelection {
-  const _LibraryFilterSelection({
+class _LibraryRefineSelection {
+  const _LibraryRefineSelection({
+    required this.sort,
     required this.favoritesOnly,
     required this.grailsOnly,
     required this.duplicatesOnly,
     required this.hasPhotoOnly,
   });
 
+  final _LibrarySortOption sort;
   final bool favoritesOnly;
   final bool grailsOnly;
   final bool duplicatesOnly;
@@ -954,6 +983,33 @@ const _libraryBrowseScopes = <_LibraryBrowseScope>[
   _LibraryBrowseScope(label: 'Other', category: 'Other'),
 ];
 
+List<_LibraryBrowseScope> _mergedLibraryBrowseScopes(
+  List<_CategoryShelfStat> categories,
+) {
+  final scopes = <_LibraryBrowseScope>[..._libraryBrowseScopes];
+  final knownCategories = <String>{
+    for (final scope in scopes)
+      if (scope.category != null) scope.category!.trim().toLowerCase(),
+  };
+
+  for (final stat in categories) {
+    final category = stat.category.trim();
+    if (category.isEmpty) {
+      continue;
+    }
+
+    final normalizedCategory = category.toLowerCase();
+    if (knownCategories.contains(normalizedCategory)) {
+      continue;
+    }
+
+    scopes.add(_LibraryBrowseScope(label: category, category: category));
+    knownCategories.add(normalizedCategory);
+  }
+
+  return scopes;
+}
+
 class _LibraryScopeSheet extends StatelessWidget {
   const _LibraryScopeSheet({
     required this.selectedCategory,
@@ -967,63 +1023,27 @@ class _LibraryScopeSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.md,
-            AppSpacing.lg,
-            AppSpacing.lg,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 44,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                Text(
-                  'Browse Scope',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  'Choose the shelf you want to browse. Filters and sorting stay available above the collection.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                for (final scope in _libraryBrowseScopes) ...[
-                  _LibraryScopeOptionRow(
-                    scope: scope,
-                    count: scope.category == null
-                        ? totalCount
-                        : _countForCategory(categories, scope.category!),
-                    selected: scope.category == selectedCategory,
-                    onTap: () => Navigator.of(context).pop(scope),
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                ],
-              ],
+    final scopes = _mergedLibraryBrowseScopes(categories);
+
+    return CollectorBottomSheet(
+      title: 'Browse Scope',
+      description:
+          'Choose the shelf you want to browse. Filters and sorting stay available above the collection.',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final scope in scopes) ...[
+            _LibraryScopeOptionRow(
+              scope: scope,
+              count: scope.category == null
+                  ? totalCount
+                  : _countForCategory(categories, scope.category!),
+              selected: scope.category == selectedCategory,
+              onTap: () => Navigator.of(context).pop(scope),
             ),
-          ),
-        ),
+            const SizedBox(height: AppSpacing.sm),
+          ],
+        ],
       ),
     );
   }
@@ -1179,24 +1199,27 @@ class _AppliedBrowseChip extends StatelessWidget {
   }
 }
 
-class _LibraryFilterSheet extends StatefulWidget {
-  const _LibraryFilterSheet({
+class _LibraryRefineSheet extends StatefulWidget {
+  const _LibraryRefineSheet({
+    required this.sort,
     required this.favoritesOnly,
     required this.grailsOnly,
     required this.duplicatesOnly,
     required this.hasPhotoOnly,
   });
 
+  final _LibrarySortOption sort;
   final bool favoritesOnly;
   final bool grailsOnly;
   final bool duplicatesOnly;
   final bool hasPhotoOnly;
 
   @override
-  State<_LibraryFilterSheet> createState() => _LibraryFilterSheetState();
+  State<_LibraryRefineSheet> createState() => _LibraryRefineSheetState();
 }
 
-class _LibraryFilterSheetState extends State<_LibraryFilterSheet> {
+class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
+  late _LibrarySortOption _sort;
   late bool _favoritesOnly;
   late bool _grailsOnly;
   late bool _duplicatesOnly;
@@ -1205,6 +1228,7 @@ class _LibraryFilterSheetState extends State<_LibraryFilterSheet> {
   @override
   void initState() {
     super.initState();
+    _sort = widget.sort;
     _favoritesOnly = widget.favoritesOnly;
     _grailsOnly = widget.grailsOnly;
     _duplicatesOnly = widget.duplicatesOnly;
@@ -1213,6 +1237,7 @@ class _LibraryFilterSheetState extends State<_LibraryFilterSheet> {
 
   void _reset() {
     setState(() {
+      _sort = _LibrarySortOption.newest;
       _favoritesOnly = false;
       _grailsOnly = false;
       _duplicatesOnly = false;
@@ -1222,7 +1247,8 @@ class _LibraryFilterSheetState extends State<_LibraryFilterSheet> {
 
   void _apply() {
     Navigator.of(context).pop(
-      _LibraryFilterSelection(
+      _LibraryRefineSelection(
+        sort: _sort,
         favoritesOnly: _favoritesOnly,
         grailsOnly: _grailsOnly,
         duplicatesOnly: _duplicatesOnly,
@@ -1233,113 +1259,151 @@ class _LibraryFilterSheetState extends State<_LibraryFilterSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.md,
-            AppSpacing.lg,
-            AppSpacing.lg,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 44,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                Text(
-                  'Library Filters',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  'Refine the shelf without crowding the main header.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                _LibraryFilterOption(
-                  label: 'Favorites',
-                  description: 'Only show items you have starred.',
-                  active: _favoritesOnly,
-                  icon: Icons.favorite_outline_rounded,
-                  onTap: () {
-                    setState(() {
-                      _favoritesOnly = !_favoritesOnly;
-                    });
-                  },
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                _LibraryFilterOption(
-                  label: 'Grails',
-                  description: 'Focus on your most sought-after pieces.',
-                  active: _grailsOnly,
-                  icon: Icons.workspace_premium_outlined,
-                  onTap: () {
-                    setState(() {
-                      _grailsOnly = !_grailsOnly;
-                    });
-                  },
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                _LibraryFilterOption(
-                  label: 'Duplicates',
-                  description: 'Surface items you own more than once.',
-                  active: _duplicatesOnly,
-                  icon: Icons.copy_all_rounded,
-                  onTap: () {
-                    setState(() {
-                      _duplicatesOnly = !_duplicatesOnly;
-                    });
-                  },
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                _LibraryFilterOption(
-                  label: 'Has photo',
-                  description: 'Only include collectibles with images.',
-                  active: _hasPhotoOnly,
-                  icon: Icons.image_outlined,
-                  onTap: () {
-                    setState(() {
-                      _hasPhotoOnly = !_hasPhotoOnly;
-                    });
-                  },
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                Row(
-                  children: [
-                    Expanded(
-                      child: CollectorButton(
-                        label: 'Clear',
-                        onPressed: _reset,
-                        variant: CollectorButtonVariant.secondary,
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.md),
-                    Expanded(
-                      child: CollectorButton(label: 'Apply', onPressed: _apply),
-                    ),
-                  ],
-                ),
-              ],
+    return CollectorBottomSheet(
+      title: 'Refine Library',
+      description:
+          'Choose the order and focus the shelf without crowding the main header.',
+      footer: Row(
+        children: [
+          Expanded(
+            child: CollectorButton(
+              label: 'Clear',
+              onPressed: _reset,
+              variant: CollectorButtonVariant.secondary,
             ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: CollectorButton(label: 'Apply', onPressed: _apply),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Sort', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: AppSpacing.sm),
+          for (final option in _LibrarySortOption.values) ...[
+            _LibrarySortOptionRow(
+              option: option,
+              selected: option == _sort,
+              onTap: () {
+                setState(() {
+                  _sort = option;
+                });
+              },
+            ),
+            const SizedBox(height: AppSpacing.xs),
+          ],
+          const SizedBox(height: AppSpacing.lg),
+          Text('Filters', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: AppSpacing.sm),
+          _LibraryFilterOption(
+            label: 'Favorites',
+            description: 'Only show items you have starred.',
+            active: _favoritesOnly,
+            icon: Icons.favorite_outline_rounded,
+            onTap: () {
+              setState(() {
+                _favoritesOnly = !_favoritesOnly;
+              });
+            },
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _LibraryFilterOption(
+            label: 'Grails',
+            description: 'Focus on your most sought-after pieces.',
+            active: _grailsOnly,
+            icon: Icons.workspace_premium_outlined,
+            onTap: () {
+              setState(() {
+                _grailsOnly = !_grailsOnly;
+              });
+            },
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _LibraryFilterOption(
+            label: 'Duplicates',
+            description: 'Surface items you own more than once.',
+            active: _duplicatesOnly,
+            icon: Icons.copy_all_rounded,
+            onTap: () {
+              setState(() {
+                _duplicatesOnly = !_duplicatesOnly;
+              });
+            },
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _LibraryFilterOption(
+            label: 'Has photo',
+            description: 'Only include collectibles with images.',
+            active: _hasPhotoOnly,
+            icon: Icons.image_outlined,
+            onTap: () {
+              setState(() {
+                _hasPhotoOnly = !_hasPhotoOnly;
+              });
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LibrarySortOptionRow extends StatelessWidget {
+  const _LibrarySortOptionRow({
+    required this.option,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _LibrarySortOption option;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: 12,
+          ),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.12)
+                : AppColors.surfaceContainerHighest.withValues(alpha: 0.28),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.24)
+                  : AppColors.outlineVariant.withValues(alpha: 0.2),
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  option.label,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: selected ? AppColors.primary : AppColors.onSurface,
+                  ),
+                ),
+              ),
+              Icon(
+                selected ? Icons.check_circle_rounded : Icons.circle_outlined,
+                size: 20,
+                color: selected
+                    ? AppColors.primary
+                    : AppColors.onSurfaceVariant,
+              ),
+            ],
           ),
         ),
       ),
@@ -1430,76 +1494,6 @@ class _LibraryFilterOption extends StatelessWidget {
                 color: active ? AppColors.primary : AppColors.onSurfaceVariant,
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _LibrarySortSheet extends StatelessWidget {
-  const _LibrarySortSheet({required this.selected});
-
-  final _LibrarySortOption selected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.md,
-            AppSpacing.lg,
-            AppSpacing.lg,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 44,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                Text(
-                  'Sort Library',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  'Choose how the shelf should be ordered.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                for (final option in _LibrarySortOption.values)
-                  ListTile(
-                    onTap: () => Navigator.of(context).pop(option),
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(option.label),
-                    trailing: option == selected
-                        ? const Icon(
-                            Icons.check_rounded,
-                            color: AppColors.primary,
-                          )
-                        : null,
-                  ),
-              ],
-            ),
           ),
         ),
       ),

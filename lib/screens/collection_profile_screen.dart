@@ -11,37 +11,33 @@ import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/archive_photo_view.dart';
+import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_chip.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
+import '../widgets/collector_snack_bar.dart';
 import '../widgets/collector_text_field.dart';
 import '../widgets/resolved_avatar_image.dart';
 import 'collectible_detail_screen.dart';
-import 'collection_search_screen.dart';
 
 class CollectionProfileScreen extends StatefulWidget {
   const CollectionProfileScreen({
     super.key,
     required this.refreshSeed,
     required this.onProfileChanged,
-    required this.onOpenHome,
-    required this.onOpenLibrary,
-    required this.onOpenWishlist,
     required this.onAddItem,
     required this.onSignOut,
   });
 
   final int refreshSeed;
   final VoidCallback onProfileChanged;
-  final VoidCallback onOpenHome;
-  final VoidCallback onOpenLibrary;
-  final VoidCallback onOpenWishlist;
   final VoidCallback onAddItem;
   final Future<void> Function() onSignOut;
 
   @override
-  State<CollectionProfileScreen> createState() => _CollectionProfileScreenState();
+  State<CollectionProfileScreen> createState() =>
+      _CollectionProfileScreenState();
 }
 
 class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
@@ -100,39 +96,6 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
     }
   }
 
-  Future<void> _openFavorites() async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => const CollectionSearchScreen(
-          screenTitle: 'Favorites',
-          emptyPrompt: 'Browse the pieces you have starred across your collection.',
-          initialFavoritesOnly: true,
-          autofocus: false,
-        ),
-      ),
-    );
-
-    if (changed == true) {
-      await _reload();
-    }
-  }
-
-  Future<void> _openRecentlyAdded() async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => const CollectionSearchScreen(
-          screenTitle: 'Recently Added',
-          emptyPrompt: 'Your newest additions collect here first.',
-          autofocus: false,
-        ),
-      ),
-    );
-
-    if (changed == true) {
-      await _reload();
-    }
-  }
-
   Future<void> _openAvatarPhotoSheet(ProfileModel? profile) async {
     if (_isUploadingAvatar) {
       return;
@@ -157,7 +120,10 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
     );
   }
 
-  Future<void> _pickAndSaveAvatar(ImageSource source, ProfileModel? profile) async {
+  Future<void> _pickAndSaveAvatar(
+    ImageSource source,
+    ProfileModel? profile,
+  ) async {
     if (_isUploadingAvatar) {
       return;
     }
@@ -206,20 +172,20 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Profile photo updated.'),
-        ),
+      CollectorSnackBar.show(
+        context,
+        message: 'Profile photo updated.',
+        tone: CollectorSnackBarTone.success,
       );
     } catch (_) {
       if (!mounted) {
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not update the profile photo right now.'),
-        ),
+      CollectorSnackBar.show(
+        context,
+        message: 'Could not update the profile photo right now.',
+        tone: CollectorSnackBarTone.error,
       );
     } finally {
       if (mounted) {
@@ -236,14 +202,20 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
       useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => _EditProfileSheet(
-        profile: profile,
-        onSave: _profileRepository.save,
-      ),
+      builder: (context) =>
+          _EditProfileSheet(profile: profile, onSave: _profileRepository.save),
     );
 
     if (changed == true) {
       await _reload();
+      if (!mounted) {
+        return;
+      }
+      CollectorSnackBar.show(
+        context,
+        message: 'Profile updated.',
+        tone: CollectorSnackBarTone.success,
+      );
     }
   }
 
@@ -349,20 +321,6 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
                           ),
                           const SizedBox(height: AppSpacing.lg),
                           const _ProfileSectionTitle(
-                            title: 'Quick Actions',
-                            subtitle:
-                                'Jump to the parts of the app collectors reach for most.',
-                          ),
-                          const SizedBox(height: AppSpacing.sm),
-                          _QuickActionsGrid(
-                            data: data,
-                            onOpenFavorites: _openFavorites,
-                            onOpenLibrary: widget.onOpenLibrary,
-                            onOpenWishlist: widget.onOpenWishlist,
-                            onOpenRecentlyAdded: _openRecentlyAdded,
-                          ),
-                          const SizedBox(height: AppSpacing.lg),
-                          const _ProfileSectionTitle(
                             title: 'Account',
                             subtitle:
                                 'Keep the essentials nearby without crowding the top of the screen.',
@@ -439,8 +397,8 @@ class _ProfileHeader extends StatelessWidget {
                     Text(
                       identityLine,
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            color: AppColors.primary,
-                          ),
+                        color: AppColors.primary,
+                      ),
                     ),
                   ],
                 ),
@@ -458,14 +416,17 @@ class _ProfileHeader extends StatelessWidget {
                 ? bio!.trim()
                 : 'Add a display name, photo, and short bio to make this shelf feel unmistakably yours.',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: bio?.trim().isNotEmpty == true
-                      ? AppColors.onSurfaceVariant
-                      : AppColors.onSurface,
-                ),
+              color: bio?.trim().isNotEmpty == true
+                  ? AppColors.onSurfaceVariant
+                  : AppColors.onSurface,
+            ),
           ),
           if (data.profile?.createdAt != null) ...[
             const SizedBox(height: AppSpacing.md),
-            CollectorChip(label: 'Member since ${_formatMemberSince(data.profile!.createdAt!)}'),
+            CollectorChip(
+              label:
+                  'Member since ${_formatMemberSince(data.profile!.createdAt!)}',
+            ),
           ],
         ],
       ),
@@ -474,9 +435,7 @@ class _ProfileHeader extends StatelessWidget {
 }
 
 class _CollectorSummary extends StatelessWidget {
-  const _CollectorSummary({
-    required this.data,
-  });
+  const _CollectorSummary({required this.data});
 
   final _ProfileScreenData data;
 
@@ -504,7 +463,9 @@ class _CollectorSummary extends StatelessWidget {
                   width: cellWidth,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: AppColors.surfaceContainerHighest.withValues(alpha: 0.42),
+                      color: AppColors.surfaceContainerHighest.withValues(
+                        alpha: 0.42,
+                      ),
                       borderRadius: BorderRadius.circular(22),
                       border: Border.all(
                         color: AppColors.outlineVariant.withValues(alpha: 0.16),
@@ -525,9 +486,8 @@ class _CollectorSummary extends StatelessWidget {
                           const SizedBox(height: 2),
                           Text(
                             stat.label,
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: AppColors.onSurfaceVariant,
-                                ),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: AppColors.onSurfaceVariant),
                           ),
                         ],
                       ),
@@ -570,14 +530,11 @@ class _CollectorHighlightPanel extends StatelessWidget {
             Text(
               'Once you add your first collectible, this space can spotlight a favorite piece, the category you collect most, or the latest addition worth showing off.',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.onSurfaceVariant,
-                  ),
+                color: AppColors.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: AppSpacing.lg),
-            CollectorButton(
-              label: 'Add First Item',
-              onPressed: onAddItem,
-            ),
+            CollectorButton(label: 'Add First Item', onPressed: onAddItem),
           ],
         ),
       );
@@ -650,10 +607,7 @@ class _CollectorHighlightPanel extends StatelessWidget {
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
-                              colors: [
-                                Color(0x0D0B0E14),
-                                Color(0xE60B0E14),
-                              ],
+                              colors: [Color(0x0D0B0E14), Color(0xE60B0E14)],
                             ),
                           ),
                         ),
@@ -666,22 +620,27 @@ class _CollectorHighlightPanel extends StatelessWidget {
                             children: [
                               Text(
                                 data.favoriteCategory != null &&
-                                        featured.category.trim().toLowerCase() ==
-                                            data.favoriteCategory!.trim().toLowerCase()
+                                        featured.category
+                                                .trim()
+                                                .toLowerCase() ==
+                                            data.favoriteCategory!
+                                                .trim()
+                                                .toLowerCase()
                                     ? 'Spotlight from your top category'
                                     : featured.isFavorite
-                                        ? 'Featured on your shelf'
-                                        : 'Latest shelf addition',
-                                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                      color: AppColors.primary,
-                                    ),
+                                    ? 'Featured on your shelf'
+                                    : 'Latest shelf addition',
+                                style: Theme.of(context).textTheme.labelLarge
+                                    ?.copyWith(color: AppColors.primary),
                               ),
                               const SizedBox(height: AppSpacing.xs),
                               Text(
                                 featured.title,
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.headlineSmall,
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.headlineSmall,
                               ),
                               const SizedBox(height: AppSpacing.xs),
                               Text(
@@ -692,7 +651,8 @@ class _CollectorHighlightPanel extends StatelessWidget {
                                 ].join(' • '),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
                                       color: AppColors.onSurfaceVariant,
                                     ),
                               ),
@@ -709,8 +669,11 @@ class _CollectorHighlightPanel extends StatelessWidget {
                   runSpacing: AppSpacing.sm,
                   children: [
                     if (data.favoriteCategory != null)
-                      CollectorChip(label: 'Top category: ${data.favoriteCategory}'),
-                    if (featured.isFavorite) const CollectorChip(label: 'Favorited piece'),
+                      CollectorChip(
+                        label: 'Top category: ${data.favoriteCategory}',
+                      ),
+                    if (featured.isFavorite)
+                      const CollectorChip(label: 'Favorited piece'),
                   ],
                 ),
               ],
@@ -718,81 +681,6 @@ class _CollectorHighlightPanel extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _QuickActionsGrid extends StatelessWidget {
-  const _QuickActionsGrid({
-    required this.data,
-    required this.onOpenFavorites,
-    required this.onOpenLibrary,
-    required this.onOpenWishlist,
-    required this.onOpenRecentlyAdded,
-  });
-
-  final _ProfileScreenData data;
-  final VoidCallback onOpenFavorites;
-  final VoidCallback onOpenLibrary;
-  final VoidCallback onOpenWishlist;
-  final VoidCallback onOpenRecentlyAdded;
-
-  @override
-  Widget build(BuildContext context) {
-    final actions = [
-      _QuickActionData(
-        title: 'Favorites',
-        helper: data.favoriteCount == 0
-            ? 'Pick your first favorite to give this shortcut some gravity.'
-            : 'Open the pieces you have already starred.',
-        icon: Icons.favorite_rounded,
-        tone: AppColors.tertiary,
-        onTap: onOpenFavorites,
-      ),
-      _QuickActionData(
-        title: 'Wishlist',
-        helper: data.wishlistCount == 0
-            ? 'Nothing is waiting there yet, but the wish list is ready.'
-            : 'Jump back to the items you still want to hunt down.',
-        icon: Icons.bookmark_border_rounded,
-        tone: AppColors.secondary,
-        onTap: onOpenWishlist,
-      ),
-      _QuickActionData(
-        title: 'Categories',
-        helper: data.categoryCount == 0
-            ? 'Your shelves will sort themselves once the collection starts.'
-            : 'Browse the library and move by category faster.',
-        icon: Icons.grid_view_rounded,
-        tone: AppColors.primary,
-        onTap: onOpenLibrary,
-      ),
-      _QuickActionData(
-        title: 'Recently Added',
-        helper: data.latestItem == null
-            ? 'New arrivals will start appearing here once you add something.'
-            : 'Jump straight to the newest pieces in your collection.',
-        icon: Icons.schedule_rounded,
-        tone: AppColors.warning,
-        onTap: onOpenRecentlyAdded,
-      ),
-    ];
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final tileWidth = (constraints.maxWidth - AppSpacing.sm) / 2;
-        return Wrap(
-          spacing: AppSpacing.sm,
-          runSpacing: AppSpacing.sm,
-          children: [
-            for (final action in actions)
-              SizedBox(
-                width: tileWidth,
-                child: _QuickActionTile(data: action),
-              ),
-          ],
-        );
-      },
     );
   }
 }
@@ -822,7 +710,8 @@ class _AccountSection extends StatelessWidget {
               _AccountRow(
                 icon: Icons.edit_outlined,
                 title: 'Edit Profile',
-                subtitle: 'Update your display name, username, and collector bio.',
+                subtitle:
+                    'Update your display name, username, and collector bio.',
                 onTap: onEditProfile,
               ),
               const _AccountDivider(),
@@ -841,7 +730,8 @@ class _AccountSection extends StatelessWidget {
               const _AccountRow(
                 icon: Icons.palette_outlined,
                 title: 'Appearance',
-                subtitle: 'The app is currently using the collector dark theme.',
+                subtitle:
+                    'The app is currently using the collector dark theme.',
               ),
               const _AccountDivider(),
               const _AccountRow(
@@ -881,7 +771,8 @@ class _AccountSection extends StatelessWidget {
                     Expanded(
                       child: Text(
                         'Sign Out',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
                               color: AppColors.error.withValues(alpha: 0.92),
                             ),
                       ),
@@ -909,10 +800,7 @@ class _AccountSection extends StatelessWidget {
 }
 
 class _ProfileSectionTitle extends StatelessWidget {
-  const _ProfileSectionTitle({
-    required this.title,
-    required this.subtitle,
-  });
+  const _ProfileSectionTitle({required this.title, required this.subtitle});
 
   final String title;
   final String subtitle;
@@ -922,16 +810,13 @@ class _ProfileSectionTitle extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
+        Text(title, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 4),
         Text(
           subtitle,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: AppColors.onSurfaceVariant,
-              ),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: AppColors.onSurfaceVariant),
         ),
       ],
     );
@@ -999,7 +884,9 @@ class _ProfileAvatar extends StatelessWidget {
                               child: SizedBox(
                                 width: 20,
                                 height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
                             ),
                           ),
@@ -1038,9 +925,7 @@ class _ProfileAvatar extends StatelessWidget {
 }
 
 class _AvatarFallback extends StatelessWidget {
-  const _AvatarFallback({
-    required this.initials,
-  });
+  const _AvatarFallback({required this.initials});
 
   final String initials;
 
@@ -1060,72 +945,9 @@ class _AvatarFallback extends StatelessWidget {
       child: Center(
         child: Text(
           initials,
-          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                color: AppColors.onSurface,
-              ),
-        ),
-      ),
-    );
-  }
-}
-
-class _QuickActionTile extends StatelessWidget {
-  const _QuickActionTile({
-    required this.data,
-  });
-
-  final _QuickActionData data;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: data.onTap,
-        borderRadius: BorderRadius.circular(24),
-        child: Ink(
-          decoration: BoxDecoration(
-            color: AppColors.surfaceContainer.withValues(alpha: 0.92),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(
-              color: data.tone.withValues(alpha: 0.16),
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: data.tone.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Icon(
-                    data.icon,
-                    color: data.tone,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                Text(
-                  data.title,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: AppSpacing.xs),
-                Text(
-                  data.helper,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppColors.onSurfaceVariant,
-                      ),
-                ),
-              ],
-            ),
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(color: AppColors.onSurface),
         ),
       ),
     );
@@ -1133,73 +955,33 @@ class _QuickActionTile extends StatelessWidget {
 }
 
 class _AvatarPhotoSheet extends StatelessWidget {
-  const _AvatarPhotoSheet({
-    required this.onCamera,
-    required this.onGallery,
-  });
+  const _AvatarPhotoSheet({required this.onCamera, required this.onGallery});
 
   final VoidCallback onCamera;
   final VoidCallback onGallery;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.md,
-            AppSpacing.lg,
-            AppSpacing.lg,
+    return CollectorBottomSheet(
+      title: 'Profile Photo',
+      description: 'Choose a fresh photo for your collector identity.',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _AvatarPhotoOption(
+            icon: Icons.photo_camera_outlined,
+            title: 'Take photo',
+            helperText: 'Capture a profile shot with the camera',
+            onTap: onCamera,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Profile Photo',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'Choose a fresh photo for your collector identity.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              _AvatarPhotoOption(
-                icon: Icons.photo_camera_outlined,
-                title: 'Take photo',
-                helperText: 'Capture a profile shot with the camera',
-                onTap: onCamera,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              _AvatarPhotoOption(
-                icon: Icons.photo_library_outlined,
-                title: 'Photo library',
-                helperText: 'Pick a photo that already lives on this device',
-                onTap: onGallery,
-              ),
-            ],
+          const SizedBox(height: AppSpacing.md),
+          _AvatarPhotoOption(
+            icon: Icons.photo_library_outlined,
+            title: 'Photo library',
+            helperText: 'Pick a photo that already lives on this device',
+            onTap: onGallery,
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1244,11 +1026,7 @@ class _AvatarPhotoOption extends StatelessWidget {
                     color: AppColors.primary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Icon(
-                    icon,
-                    color: AppColors.primary,
-                    size: 22,
-                  ),
+                  child: Icon(icon, color: AppColors.primary, size: 22),
                 ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
@@ -1263,8 +1041,8 @@ class _AvatarPhotoOption extends StatelessWidget {
                       Text(
                         helperText,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: AppColors.onSurfaceVariant,
-                            ),
+                          color: AppColors.onSurfaceVariant,
+                        ),
                       ),
                     ],
                   ),
@@ -1314,13 +1092,17 @@ class _AccountRow extends StatelessWidget {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: AppColors.surfaceContainerHighest.withValues(alpha: 0.4),
+                  color: AppColors.surfaceContainerHighest.withValues(
+                    alpha: 0.4,
+                  ),
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Icon(
                   icon,
                   size: 18,
-                  color: onTap == null ? AppColors.onSurfaceVariant : AppColors.primary,
+                  color: onTap == null
+                      ? AppColors.onSurfaceVariant
+                      : AppColors.primary,
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
@@ -1328,16 +1110,13 @@ class _AccountRow extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
+                    Text(title, style: Theme.of(context).textTheme.titleSmall),
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: AppColors.onSurfaceVariant,
-                          ),
+                        color: AppColors.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -1372,9 +1151,7 @@ class _AccountDivider extends StatelessWidget {
 }
 
 class _ProfileErrorState extends StatelessWidget {
-  const _ProfileErrorState({
-    required this.onRetry,
-  });
+  const _ProfileErrorState({required this.onRetry});
 
   final Future<void> Function() onRetry;
 
@@ -1404,15 +1181,12 @@ class _ProfileErrorState extends StatelessWidget {
               Text(
                 'Try again and we will pull your latest profile and collection summary.',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
+                  color: AppColors.onSurfaceVariant,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppSpacing.lg),
-              CollectorButton(
-                label: 'Retry',
-                onPressed: () => onRetry(),
-              ),
+              CollectorButton(label: 'Retry', onPressed: () => onRetry()),
             ],
           ),
         ),
@@ -1422,10 +1196,7 @@ class _ProfileErrorState extends StatelessWidget {
 }
 
 class _EditProfileSheet extends StatefulWidget {
-  const _EditProfileSheet({
-    required this.profile,
-    required this.onSave,
-  });
+  const _EditProfileSheet({required this.profile, required this.onSave});
 
   final ProfileModel? profile;
   final Future<ProfileModel> Function(ProfileModel profile) onSave;
@@ -1438,22 +1209,47 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
   late final TextEditingController _displayNameController;
   late final TextEditingController _usernameController;
   late final TextEditingController _bioController;
+  late final FocusNode _bioFocusNode;
   var _isSaving = false;
+  bool get _showBioClearButton =>
+      _bioFocusNode.hasFocus && _bioController.text.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
-    _displayNameController = TextEditingController(text: widget.profile?.displayName ?? '');
-    _usernameController = TextEditingController(text: widget.profile?.username ?? '');
+    _displayNameController = TextEditingController(
+      text: widget.profile?.displayName ?? '',
+    );
+    _usernameController = TextEditingController(
+      text: widget.profile?.username ?? '',
+    );
     _bioController = TextEditingController(text: widget.profile?.bio ?? '');
+    _bioFocusNode = FocusNode();
+    _bioController.addListener(_handleBioInputStateChanged);
+    _bioFocusNode.addListener(_handleBioInputStateChanged);
   }
 
   @override
   void dispose() {
     _displayNameController.dispose();
     _usernameController.dispose();
+    _bioController.removeListener(_handleBioInputStateChanged);
     _bioController.dispose();
+    _bioFocusNode
+      ..removeListener(_handleBioInputStateChanged)
+      ..dispose();
     super.dispose();
+  }
+
+  void _handleBioInputStateChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _clearBio() {
+    _bioController.clear();
+    _bioFocusNode.requestFocus();
   }
 
   Future<void> _save() async {
@@ -1473,7 +1269,9 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
           username: _usernameController.text.trim().isEmpty
               ? null
               : _usernameController.text.trim(),
-          bio: _bioController.text.trim().isEmpty ? null : _bioController.text.trim(),
+          bio: _bioController.text.trim().isEmpty
+              ? null
+              : _bioController.text.trim(),
           avatarUrl: widget.profile?.avatarUrl,
           createdAt: widget.profile?.createdAt,
           updatedAt: widget.profile?.updatedAt,
@@ -1483,10 +1281,10 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
       Navigator.of(context).pop(true);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not save your profile right now.'),
-        ),
+      CollectorSnackBar.show(
+        context,
+        message: 'Could not save your profile right now.',
+        tone: CollectorSnackBarTone.error,
       );
     } finally {
       if (mounted) {
@@ -1499,129 +1297,81 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.md,
-            AppSpacing.lg,
-            AppSpacing.lg + MediaQuery.viewInsetsOf(context).bottom,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Edit Profile',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'Keep it simple for now: name, username, and a short line about what you collect.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              CollectorTextField(
-                label: 'Display Name',
-                hintText: 'How your shelf should introduce you',
-                controller: _displayNameController,
-                textInputAction: TextInputAction.next,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              CollectorTextField(
-                label: 'Username',
-                hintText: 'collector_handle',
-                controller: _usernameController,
-                textInputAction: TextInputAction.next,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              Text(
-                'BIO',
-                style: Theme.of(context).textTheme.labelSmall,
-              ),
-              const SizedBox(height: AppSpacing.xs),
-              TextField(
-                controller: _bioController,
-                minLines: 3,
-                maxLines: 5,
-                textInputAction: TextInputAction.done,
-                decoration: InputDecoration(
-                  hintText: 'Action figures, games, comics, or whatever makes your shelf feel alive.',
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.md,
-                    vertical: AppSpacing.md,
-                  ),
-                  enabledBorder: const OutlineInputBorder(
-                    borderSide: BorderSide.none,
-                    borderRadius: BorderRadius.all(Radius.circular(20)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: const BorderRadius.all(Radius.circular(20)),
-                    borderSide: BorderSide(
-                      color: AppColors.primary.withValues(alpha: 0.5),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              SizedBox(
-                width: double.infinity,
-                child: CollectorButton(
-                  label: 'Save Profile',
-                  onPressed: _save,
-                  isLoading: _isSaving,
-                ),
-              ),
-            ],
-          ),
+    return CollectorBottomSheet(
+      title: 'Edit Profile',
+      description:
+          'Keep it simple for now: name, username, and a short line about what you collect.',
+      footer: SizedBox(
+        width: double.infinity,
+        child: CollectorButton(
+          label: 'Save Profile',
+          onPressed: _save,
+          isLoading: _isSaving,
         ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CollectorTextField(
+            label: 'Display Name',
+            hintText: 'How your shelf should introduce you',
+            controller: _displayNameController,
+            textInputAction: TextInputAction.next,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          CollectorTextField(
+            label: 'Username',
+            hintText: 'collector_handle',
+            controller: _usernameController,
+            textInputAction: TextInputAction.next,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text('BIO', style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: AppSpacing.xs),
+          TextField(
+            controller: _bioController,
+            focusNode: _bioFocusNode,
+            minLines: 3,
+            maxLines: 5,
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(
+              hintText:
+                  'Action figures, games, comics, or whatever makes your shelf feel alive.',
+              suffixIcon: _showBioClearButton
+                  ? IconButton(
+                      tooltip: 'Clear',
+                      onPressed: _clearBio,
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      color: AppColors.onSurfaceVariant,
+                    )
+                  : null,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md,
+                vertical: AppSpacing.md,
+              ),
+              enabledBorder: const OutlineInputBorder(
+                borderSide: BorderSide.none,
+                borderRadius: BorderRadius.all(Radius.circular(20)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: const BorderRadius.all(Radius.circular(20)),
+                borderSide: BorderSide(
+                  color: AppColors.primary.withValues(alpha: 0.5),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
 class _SummaryStat {
-  const _SummaryStat({
-    required this.label,
-    required this.value,
-  });
+  const _SummaryStat({required this.label, required this.value});
 
   final String label;
   final String value;
-}
-
-class _QuickActionData {
-  const _QuickActionData({
-    required this.title,
-    required this.helper,
-    required this.icon,
-    required this.tone,
-    required this.onTap,
-  });
-
-  final String title;
-  final String helper;
-  final IconData icon;
-  final Color tone;
-  final VoidCallback onTap;
 }
 
 class _ProfileScreenData {

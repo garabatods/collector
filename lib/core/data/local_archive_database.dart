@@ -256,18 +256,19 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onUpgrade: (m, from, to) async {
-          if (from < 2) {
-            for (final table in allTables.toList().reversed) {
-              await m.deleteTable(table.actualTableName);
-            }
-            await m.createAll();
-          }
-        },
-      );
+    onUpgrade: (m, from, to) async {
+      if (from < 2) {
+        for (final table in allTables.toList().reversed) {
+          await m.deleteTable(table.actualTableName);
+        }
+        await m.createAll();
+      }
+    },
+  );
 
   Stream<ProfileModel?> watchProfile(String userId) {
-    final query = select(profilesLocal)..where((tbl) => tbl.userId.equals(userId));
+    final query = select(profilesLocal)
+      ..where((tbl) => tbl.userId.equals(userId));
     return query.watchSingleOrNull().map((row) {
       if (row == null) {
         return null;
@@ -285,9 +286,9 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
   }
 
   Future<ProfileModel?> getProfile(String userId) async {
-    final row = await (select(profilesLocal)
-          ..where((tbl) => tbl.userId.equals(userId)))
-        .getSingleOrNull();
+    final row = await (select(
+      profilesLocal,
+    )..where((tbl) => tbl.userId.equals(userId))).getSingleOrNull();
     if (row == null) {
       return null;
     }
@@ -305,44 +306,42 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
   Stream<List<CollectibleModel>> watchCollectibles(String userId) {
     final query = select(collectiblesLocal)
       ..where((tbl) => tbl.userId.equals(userId))
-      ..orderBy([
-        (tbl) => OrderingTerm.desc(tbl.createdAt),
-      ]);
+      ..orderBy([(tbl) => OrderingTerm.desc(tbl.createdAt)]);
     return query.watch().map(
-          (rows) => rows
-              .map(
-                (row) => CollectibleModel.fromJson({
-                  'id': row.id,
-                  'user_id': row.userId,
-                  'barcode': row.barcode,
-                  'title': row.title,
-                  'category': row.category,
-                  'description': row.description,
-                  'brand': row.brand,
-                  'series': row.series,
-                  'franchise': row.franchise,
-                  'line_or_series': row.lineOrSeries,
-                  'character_or_subject': row.characterOrSubject,
-                  'release_year': row.releaseYear,
-                  'box_status': row.boxStatus,
-                  'item_number': row.itemNumber,
-                  'item_condition': row.itemCondition,
-                  'quantity': row.quantity,
-                  'purchase_price': row.purchasePrice,
-                  'estimated_value': row.estimatedValue,
-                  'acquired_on': row.acquiredOn,
-                  'notes': row.notes,
-                  'is_favorite': row.isFavorite,
-                  'is_grail': row.isGrail,
-                  'is_duplicate': row.isDuplicate,
-                  'open_to_trade': row.openToTrade,
-                  'created_at': row.createdAt,
-                  'updated_at': row.updatedAt,
-                  'collectible_tags': _decodeCollectibleTagsJson(row.tagsJson),
-                }),
-              )
-              .toList(growable: false),
-        );
+      (rows) => rows
+          .map(
+            (row) => CollectibleModel.fromJson({
+              'id': row.id,
+              'user_id': row.userId,
+              'barcode': row.barcode,
+              'title': row.title,
+              'category': row.category,
+              'description': row.description,
+              'brand': row.brand,
+              'series': row.series,
+              'franchise': row.franchise,
+              'line_or_series': row.lineOrSeries,
+              'character_or_subject': row.characterOrSubject,
+              'release_year': row.releaseYear,
+              'box_status': row.boxStatus,
+              'item_number': row.itemNumber,
+              'item_condition': row.itemCondition,
+              'quantity': row.quantity,
+              'purchase_price': row.purchasePrice,
+              'estimated_value': row.estimatedValue,
+              'acquired_on': row.acquiredOn,
+              'notes': row.notes,
+              'is_favorite': row.isFavorite,
+              'is_grail': row.isGrail,
+              'is_duplicate': row.isDuplicate,
+              'open_to_trade': row.openToTrade,
+              'created_at': row.createdAt,
+              'updated_at': row.updatedAt,
+              'collectible_tags': _decodeCollectibleTagsJson(row.tagsJson),
+            }),
+          )
+          .toList(growable: false),
+    );
   }
 
   Future<List<CollectibleModel>> getCollectibles(String userId) async {
@@ -352,43 +351,41 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
   Stream<CollectibleModel?> watchCollectibleById(String userId, String id) {
     return watchCollectibles(userId).map(
       (items) => items.cast<CollectibleModel?>().firstWhere(
-            (item) => item?.id == id,
-            orElse: () => null,
-          ),
+        (item) => item?.id == id,
+        orElse: () => null,
+      ),
     );
   }
 
   Stream<List<WishlistItemModel>> watchWishlistItems(String userId) {
     final query = select(wishlistItemsLocal)
       ..where((tbl) => tbl.userId.equals(userId))
-      ..orderBy([
-        (tbl) => OrderingTerm.desc(tbl.createdAt),
-      ]);
+      ..orderBy([(tbl) => OrderingTerm.desc(tbl.createdAt)]);
     return query.watch().map(
-          (rows) => rows
-              .map(
-                (row) => WishlistItemModel.fromJson({
-                  'id': row.id,
-                  'user_id': row.userId,
-                  'title': row.title,
-                  'category': row.category,
-                  'description': row.description,
-                  'brand': row.brand,
-                  'series': row.series,
-                  'franchise': row.franchise,
-                  'line_or_series': row.lineOrSeries,
-                  'character_or_subject': row.characterOrSubject,
-                  'release_year': row.releaseYear,
-                  'box_status': row.boxStatus,
-                  'priority': row.priority,
-                  'target_price': row.targetPrice,
-                  'notes': row.notes,
-                  'created_at': row.createdAt,
-                  'updated_at': row.updatedAt,
-                }),
-              )
-              .toList(growable: false),
-        );
+      (rows) => rows
+          .map(
+            (row) => WishlistItemModel.fromJson({
+              'id': row.id,
+              'user_id': row.userId,
+              'title': row.title,
+              'category': row.category,
+              'description': row.description,
+              'brand': row.brand,
+              'series': row.series,
+              'franchise': row.franchise,
+              'line_or_series': row.lineOrSeries,
+              'character_or_subject': row.characterOrSubject,
+              'release_year': row.releaseYear,
+              'box_status': row.boxStatus,
+              'priority': row.priority,
+              'target_price': row.targetPrice,
+              'notes': row.notes,
+              'created_at': row.createdAt,
+              'updated_at': row.updatedAt,
+            }),
+          )
+          .toList(growable: false),
+    );
   }
 
   Future<List<WishlistItemModel>> getWishlistItems(String userId) async {
@@ -404,42 +401,44 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
         (tbl) => OrderingTerm.asc(tbl.createdAt),
       ]);
     return query.watch().map(
-          (rows) => rows
-              .map(
-                (row) => CollectiblePhotoModel.fromJson({
-                  'id': row.id,
-                  'collectible_id': row.collectibleId,
-                  'storage_bucket': row.storageBucket,
-                  'storage_path': row.storagePath,
-                  'caption': row.caption,
-                  'is_primary': row.isPrimary,
-                  'display_order': row.displayOrder,
-                  'created_at': row.createdAt,
-                  'updated_at': row.updatedAt,
-                }),
-              )
-              .toList(growable: false),
-        );
+      (rows) => rows
+          .map(
+            (row) => CollectiblePhotoModel.fromJson({
+              'id': row.id,
+              'collectible_id': row.collectibleId,
+              'storage_bucket': row.storageBucket,
+              'storage_path': row.storagePath,
+              'caption': row.caption,
+              'is_primary': row.isPrimary,
+              'display_order': row.displayOrder,
+              'created_at': row.createdAt,
+              'updated_at': row.updatedAt,
+            }),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  Future<List<CollectiblePhotoModel>> getPhotos(String userId) async {
+    return watchPhotos(userId).first;
   }
 
   Stream<List<TagModel>> watchTags(String userId) {
     final query = select(tagsLocal)
       ..where((tbl) => tbl.userId.equals(userId))
-      ..orderBy([
-        (tbl) => OrderingTerm.asc(tbl.name),
-      ]);
+      ..orderBy([(tbl) => OrderingTerm.asc(tbl.name)]);
     return query.watch().map(
-          (rows) => rows
-              .map(
-                (row) => TagModel.fromJson({
-                  'id': row.id,
-                  'user_id': row.userId,
-                  'name': row.name,
-                  'created_at': row.createdAt,
-                }),
-              )
-              .toList(growable: false),
-        );
+      (rows) => rows
+          .map(
+            (row) => TagModel.fromJson({
+              'id': row.id,
+              'user_id': row.userId,
+              'name': row.name,
+              'created_at': row.createdAt,
+            }),
+          )
+          .toList(growable: false),
+    );
   }
 
   Future<List<TagModel>> getTags(String userId) async {
@@ -450,17 +449,17 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
     final query = select(collectibleTagLinksLocal)
       ..where((tbl) => tbl.userId.equals(userId));
     return query.watch().map(
-          (rows) => rows
-              .map(
-                (row) => ArchiveTagLinkRecord(
-                  userId: row.userId,
-                  collectibleId: row.collectibleId,
-                  tagId: row.tagId,
-                  createdAt: _parseDateTime(row.createdAt),
-                ),
-              )
-              .toList(growable: false),
-        );
+      (rows) => rows
+          .map(
+            (row) => ArchiveTagLinkRecord(
+              userId: row.userId,
+              collectibleId: row.collectibleId,
+              tagId: row.tagId,
+              createdAt: _parseDateTime(row.createdAt),
+            ),
+          )
+          .toList(growable: false),
+    );
   }
 
   Stream<ArchiveLocalSyncState?> watchSyncState(String userId) {
@@ -470,9 +469,9 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
   }
 
   Future<ArchiveLocalSyncState?> getSyncState(String userId) async {
-    final row = await (select(archiveSyncStates)
-          ..where((tbl) => tbl.userId.equals(userId)))
-        .getSingleOrNull();
+    final row = await (select(
+      archiveSyncStates,
+    )..where((tbl) => tbl.userId.equals(userId))).getSingleOrNull();
     return _mapSyncStateRow(row);
   }
 
@@ -480,23 +479,23 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
     final query = select(photoCacheEntries)
       ..where((tbl) => tbl.userId.equals(userId));
     return query.watch().map(
-          (rows) => rows
-              .map(
-                (row) => LocalPhotoCacheEntry(
-                  photoId: row.photoId,
-                  userId: row.userId,
-                  collectibleId: row.collectibleId,
-                  storagePath: row.storagePath,
-                  localPath: row.localPath,
-                  remoteUrl: row.remoteUrl,
-                  remoteUrlExpiresAt: _parseDateTime(row.remoteUrlExpiresAt),
-                  byteSize: row.byteSize,
-                  photoUpdatedAt: _parseDateTime(row.photoUpdatedAt),
-                  lastTouchedAt: _parseDateTime(row.lastTouchedAt),
-                ),
-              )
-              .toList(growable: false),
-        );
+      (rows) => rows
+          .map(
+            (row) => LocalPhotoCacheEntry(
+              photoId: row.photoId,
+              userId: row.userId,
+              collectibleId: row.collectibleId,
+              storagePath: row.storagePath,
+              localPath: row.localPath,
+              remoteUrl: row.remoteUrl,
+              remoteUrlExpiresAt: _parseDateTime(row.remoteUrlExpiresAt),
+              byteSize: row.byteSize,
+              photoUpdatedAt: _parseDateTime(row.photoUpdatedAt),
+              lastTouchedAt: _parseDateTime(row.lastTouchedAt),
+            ),
+          )
+          .toList(growable: false),
+    );
   }
 
   Future<List<LocalPhotoCacheEntry>> getPhotoCacheEntries(String userId) async {
@@ -530,16 +529,30 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
       if (tag == null) {
         continue;
       }
-      tagsByCollectibleId.putIfAbsent(link.collectibleId, () => <TagModel>[]).add(tag);
+      tagsByCollectibleId
+          .putIfAbsent(link.collectibleId, () => <TagModel>[])
+          .add(tag);
     }
 
     await transaction(() async {
-      await (delete(profilesLocal)..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
-      await (delete(collectiblesLocal)..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
-      await (delete(collectiblePhotosLocal)..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
-      await (delete(wishlistItemsLocal)..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
-      await (delete(tagsLocal)..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
-      await (delete(collectibleTagLinksLocal)..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
+      await (delete(
+        profilesLocal,
+      )..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
+      await (delete(
+        collectiblesLocal,
+      )..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
+      await (delete(
+        collectiblePhotosLocal,
+      )..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
+      await (delete(
+        wishlistItemsLocal,
+      )..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
+      await (delete(
+        tagsLocal,
+      )..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
+      await (delete(
+        collectibleTagLinksLocal,
+      )..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
 
       if (snapshot.profile != null) {
         await into(profilesLocal).insertOnConflictUpdate(
@@ -737,7 +750,10 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
     );
   }
 
-  Future<void> upsertCollectible(CollectibleModel collectible, String userId) async {
+  Future<void> upsertCollectible(
+    CollectibleModel collectible,
+    String userId,
+  ) async {
     final collectibleId = collectible.id;
     if (collectibleId == null || collectibleId.isEmpty) {
       return;
@@ -768,7 +784,9 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
         isGrail: Value(collectible.isGrail),
         isDuplicate: Value(collectible.isDuplicate),
         openToTrade: Value(collectible.openToTrade),
-        tagsJson: Value(jsonEncode(collectible.tags.map(_tagToJson).toList(growable: false))),
+        tagsJson: Value(
+          jsonEncode(collectible.tags.map(_tagToJson).toList(growable: false)),
+        ),
         createdAt: Value(_dateTimeString(collectible.createdAt)),
         updatedAt: Value(_dateTimeString(collectible.updatedAt)),
       ),
@@ -781,9 +799,11 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
     required List<TagModel> tags,
   }) async {
     await transaction(() async {
-      await (delete(collectibleTagLinksLocal)
-            ..where((tbl) =>
-                tbl.userId.equals(userId) & tbl.collectibleId.equals(collectibleId)))
+      await (delete(collectibleTagLinksLocal)..where(
+            (tbl) =>
+                tbl.userId.equals(userId) &
+                tbl.collectibleId.equals(collectibleId),
+          ))
           .go();
       if (tags.isNotEmpty) {
         await batch((batch) {
@@ -818,13 +838,17 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
         });
       }
 
-      final collectible = await (select(collectiblesLocal)
-            ..where((tbl) => tbl.id.equals(collectibleId)))
-          .getSingleOrNull();
+      final collectible = await (select(
+        collectiblesLocal,
+      )..where((tbl) => tbl.id.equals(collectibleId))).getSingleOrNull();
       if (collectible != null) {
-        await (update(collectiblesLocal)..where((tbl) => tbl.id.equals(collectibleId))).write(
+        await (update(
+          collectiblesLocal,
+        )..where((tbl) => tbl.id.equals(collectibleId))).write(
           CollectiblesLocalCompanion(
-            tagsJson: Value(jsonEncode(tags.map(_tagToJson).toList(growable: false))),
+            tagsJson: Value(
+              jsonEncode(tags.map(_tagToJson).toList(growable: false)),
+            ),
           ),
         );
       }
@@ -833,20 +857,27 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
 
   Future<void> deleteCollectible(String userId, String collectibleId) async {
     await transaction(() async {
-      await (delete(collectiblesLocal)
-            ..where((tbl) => tbl.userId.equals(userId) & tbl.id.equals(collectibleId)))
+      await (delete(collectiblesLocal)..where(
+            (tbl) => tbl.userId.equals(userId) & tbl.id.equals(collectibleId),
+          ))
           .go();
-      await (delete(collectiblePhotosLocal)
-            ..where((tbl) =>
-                tbl.userId.equals(userId) & tbl.collectibleId.equals(collectibleId)))
+      await (delete(collectiblePhotosLocal)..where(
+            (tbl) =>
+                tbl.userId.equals(userId) &
+                tbl.collectibleId.equals(collectibleId),
+          ))
           .go();
-      await (delete(collectibleTagLinksLocal)
-            ..where((tbl) =>
-                tbl.userId.equals(userId) & tbl.collectibleId.equals(collectibleId)))
+      await (delete(collectibleTagLinksLocal)..where(
+            (tbl) =>
+                tbl.userId.equals(userId) &
+                tbl.collectibleId.equals(collectibleId),
+          ))
           .go();
-      await (delete(photoCacheEntries)
-            ..where((tbl) =>
-                tbl.userId.equals(userId) & tbl.collectibleId.equals(collectibleId)))
+      await (delete(photoCacheEntries)..where(
+            (tbl) =>
+                tbl.userId.equals(userId) &
+                tbl.collectibleId.equals(collectibleId),
+          ))
           .go();
     });
   }
@@ -895,9 +926,9 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
   }
 
   Future<void> deleteWishlistItem(String userId, String itemId) async {
-    await (delete(wishlistItemsLocal)
-          ..where((tbl) => tbl.userId.equals(userId) & tbl.id.equals(itemId)))
-        .go();
+    await (delete(
+      wishlistItemsLocal,
+    )..where((tbl) => tbl.userId.equals(userId) & tbl.id.equals(itemId))).go();
   }
 
   Future<void> upsertPhoto(CollectiblePhotoModel photo, String userId) async {
@@ -927,9 +958,11 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
     List<CollectiblePhotoModel> photos,
   ) async {
     await transaction(() async {
-      await (delete(collectiblePhotosLocal)
-            ..where((tbl) =>
-                tbl.userId.equals(userId) & tbl.collectibleId.equals(collectibleId)))
+      await (delete(collectiblePhotosLocal)..where(
+            (tbl) =>
+                tbl.userId.equals(userId) &
+                tbl.collectibleId.equals(collectibleId),
+          ))
           .go();
       if (photos.isNotEmpty) {
         await batch((batch) {
@@ -970,22 +1003,28 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
         remoteUrlExpiresAt: Value(_dateTimeString(entry.remoteUrlExpiresAt)),
         byteSize: Value(entry.byteSize),
         photoUpdatedAt: Value(_dateTimeString(entry.photoUpdatedAt)),
-        lastTouchedAt: Value(_dateTimeString(entry.lastTouchedAt ?? DateTime.now())),
+        lastTouchedAt: Value(
+          _dateTimeString(entry.lastTouchedAt ?? DateTime.now()),
+        ),
       ),
     );
   }
 
   Future<void> deletePhotoCacheEntry(String photoId) async {
-    await (delete(photoCacheEntries)..where((tbl) => tbl.photoId.equals(photoId))).go();
+    await (delete(
+      photoCacheEntries,
+    )..where((tbl) => tbl.photoId.equals(photoId))).go();
   }
 
   Future<void> deletePhotoCacheEntriesForCollectible(
     String userId,
     String collectibleId,
   ) async {
-    await (delete(photoCacheEntries)
-          ..where((tbl) =>
-              tbl.userId.equals(userId) & tbl.collectibleId.equals(collectibleId)))
+    await (delete(photoCacheEntries)..where(
+          (tbl) =>
+              tbl.userId.equals(userId) &
+              tbl.collectibleId.equals(collectibleId),
+        ))
         .go();
   }
 

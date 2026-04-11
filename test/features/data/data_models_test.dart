@@ -2,7 +2,6 @@ import 'package:collectorapp/features/collection/data/models/collectible_model.d
 import 'package:collectorapp/features/collection/data/models/collectible_photo_model.dart';
 import 'package:collectorapp/features/collection/data/models/tag_model.dart';
 import 'package:collectorapp/features/collection/data/repositories/collectible_photos_repository.dart';
-import 'package:collectorapp/features/collection/data/services/upcitemdb_barcode_lookup_service.dart';
 import 'package:collectorapp/features/profile/data/models/profile_model.dart';
 import 'package:collectorapp/features/wishlist/data/models/wishlist_item_model.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,16 +21,13 @@ void main() {
 
       expect(model.id, 'user-1');
       expect(model.username, 'collector_01');
-      expect(
-        model.toUpsertJson(userId: 'user-1'),
-        {
-          'id': 'user-1',
-          'username': 'collector_01',
-          'display_name': 'Collector One',
-          'avatar_url': 'https://example.com/avatar.png',
-          'bio': 'Loves sixth scale.',
-        },
-      );
+      expect(model.toUpsertJson(userId: 'user-1'), {
+        'id': 'user-1',
+        'username': 'collector_01',
+        'display_name': 'Collector One',
+        'avatar_url': 'https://example.com/avatar.png',
+        'bio': 'Loves sixth scale.',
+      });
     });
   });
 
@@ -108,13 +104,10 @@ void main() {
       expect(model.id, 'tag-1');
       expect(model.userId, 'user-1');
       expect(model.name, 'Display Shelf');
-      expect(
-        model.toInsertJson(userId: 'user-1'),
-        {
-          'user_id': 'user-1',
-          'name': 'Display Shelf',
-        },
-      );
+      expect(model.toInsertJson(userId: 'user-1'), {
+        'user_id': 'user-1',
+        'name': 'Display Shelf',
+      });
     });
   });
 
@@ -179,28 +172,6 @@ void main() {
       expect(json['line_or_series'], 'Marvel Legends');
       expect(json['series'], 'Marvel Legends');
       expect(json['box_status'], 'sealed');
-    });
-  });
-
-  group('UpcItemDbBarcodeLookupService', () {
-    test('maps collector toy products into app categories', () {
-      expect(
-        UpcItemDbBarcodeLookupService.suggestCollectorCategory(
-          rawCategory: 'Toys & Games > Toy Figures & Playsets',
-          title: 'Star Wars The Vintage Collection Boba Fett',
-        ),
-        'Action Figures',
-      );
-    });
-
-    test('maps card products into trading cards', () {
-      expect(
-        UpcItemDbBarcodeLookupService.suggestCollectorCategory(
-          rawCategory: 'Collectibles > Trading Cards',
-          title: 'Pokemon Scarlet & Violet Booster Pack',
-        ),
-        'Trading Cards',
-      );
     });
   });
 }

@@ -7,6 +7,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import 'archive_photo_view.dart';
 import 'collector_panel.dart';
+import 'collector_snack_bar.dart';
 import '../screens/collectible_detail_screen.dart';
 
 class CollectibleGridCard extends StatefulWidget {
@@ -90,8 +91,10 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
       setState(() {
         _isFavorite = !nextValue;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not update favorite right now.')),
+      CollectorSnackBar.show(
+        context,
+        message: 'Could not update favorite right now.',
+        tone: CollectorSnackBarTone.error,
       );
     } finally {
       if (mounted) {
@@ -332,8 +335,10 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
       setState(() {
         _isFavorite = !nextValue;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not update favorite right now.')),
+      CollectorSnackBar.show(
+        context,
+        message: 'Could not update favorite right now.',
+        tone: CollectorSnackBarTone.error,
       );
     } finally {
       if (mounted) {

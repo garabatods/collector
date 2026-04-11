@@ -140,7 +140,8 @@ abstract final class AppTheme {
         filled: true,
         fillColor: AppColors.surfaceContainerHighest,
         hintStyle: textTheme.bodyMedium?.copyWith(
-          color: AppColors.onSurfaceVariant.withValues(alpha: 0.55),
+          color: AppColors.onSurfaceVariant.withValues(alpha: 0.38),
+          fontStyle: FontStyle.italic,
         ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
@@ -194,40 +195,41 @@ abstract final class AppTheme {
     final veryCompact =
         width <= 380 || height <= 720 || (width <= 400 && height <= 780);
     if (veryCompact) {
-      return const _ViewportTypographyProfile(
-        titleScale: 0.6,
-        bodyScale: 0.76,
-      );
+      return const _ViewportTypographyProfile(titleScale: 0.6, bodyScale: 0.76);
     }
 
     final compact = width < 390 || height < 780 || textScale > 1.05;
     if (compact) {
-      return const _ViewportTypographyProfile(
-        titleScale: 0.78,
-        bodyScale: 0.9,
-      );
+      return const _ViewportTypographyProfile(titleScale: 0.78, bodyScale: 0.9);
     }
 
     return null;
   }
 
-  static TextTheme _scaledTextTheme(TextTheme textTheme, {
+  static TextTheme _scaledTextTheme(
+    TextTheme textTheme, {
     required double titleScale,
     required double bodyScale,
   }) {
     return textTheme.copyWith(
-      displayLarge:
-          _scaledTextStyle(textTheme.displayLarge, scale: titleScale),
-      displayMedium:
-          _scaledTextStyle(textTheme.displayMedium, scale: titleScale),
-      displaySmall:
-          _scaledTextStyle(textTheme.displaySmall, scale: titleScale),
-      headlineLarge:
-          _scaledTextStyle(textTheme.headlineLarge, scale: titleScale),
-      headlineMedium:
-          _scaledTextStyle(textTheme.headlineMedium, scale: titleScale),
-      headlineSmall:
-          _scaledTextStyle(textTheme.headlineSmall, scale: titleScale),
+      displayLarge: _scaledTextStyle(textTheme.displayLarge, scale: titleScale),
+      displayMedium: _scaledTextStyle(
+        textTheme.displayMedium,
+        scale: titleScale,
+      ),
+      displaySmall: _scaledTextStyle(textTheme.displaySmall, scale: titleScale),
+      headlineLarge: _scaledTextStyle(
+        textTheme.headlineLarge,
+        scale: titleScale,
+      ),
+      headlineMedium: _scaledTextStyle(
+        textTheme.headlineMedium,
+        scale: titleScale,
+      ),
+      headlineSmall: _scaledTextStyle(
+        textTheme.headlineSmall,
+        scale: titleScale,
+      ),
       titleLarge: _scaledTextStyle(textTheme.titleLarge, scale: titleScale),
       titleMedium: _scaledTextStyle(textTheme.titleMedium, scale: titleScale),
       titleSmall: _scaledTextStyle(textTheme.titleSmall, scale: titleScale),
@@ -240,7 +242,8 @@ abstract final class AppTheme {
     );
   }
 
-  static TextStyle? _scaledTextStyle(TextStyle? style, {
+  static TextStyle? _scaledTextStyle(
+    TextStyle? style, {
     required double scale,
   }) {
     if (style == null || style.fontSize == null) {

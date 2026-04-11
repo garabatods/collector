@@ -30,9 +30,6 @@ class AddItemAutofillResolver {
         ? AddItemFormMode.comic
         : AddItemFormMode.general;
 
-    final categoryCandidate = formMode == AddItemFormMode.comic
-        ? 'Comics'
-        : identificationResult.suggestedCategory;
     final brandCandidate = formMode == AddItemFormMode.comic
         ? identificationResult.publisherCandidate
         : identificationResult.brand;
@@ -43,10 +40,6 @@ class AddItemAutofillResolver {
     return AddItemAutofillResult(
       formMode: formMode,
       title: _clean(identificationResult.title),
-      category: _resolveStringMatch(
-        candidate: categoryCandidate,
-        options: vocabulary.categories,
-      ),
       brandOrPublisher: _resolveStringMatch(
         candidate: brandCandidate,
         options: vocabulary.brands,

@@ -5,6 +5,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_radii.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_sync_status_banner.dart';
+import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collector_bottom_bar.dart';
 import 'ai_photo_identification_screen.dart';
 import 'collection_home_screen.dart';
@@ -28,12 +29,7 @@ class HomeDashboardScreen extends StatefulWidget {
   State<HomeDashboardScreen> createState() => _HomeDashboardScreenState();
 }
 
-enum _DashboardTab {
-  home,
-  library,
-  wishlist,
-  profile,
-}
+enum _DashboardTab { home, library, wishlist, profile }
 
 class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   final _archiveRepository = ArchiveRepository.instance;
@@ -105,9 +101,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
 
   Future<void> _openScannerFlow() async {
     final created = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => const ScannerFlowScreen(),
-      ),
+      MaterialPageRoute<bool>(builder: (_) => const ScannerFlowScreen()),
     );
 
     if (created == true) {
@@ -150,6 +144,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         onAddFirstItem: _openManualAddFlow,
         onScanItem: _openScannerFlow,
         onOpenSearch: _openLibrarySearch,
+        onOpenLibrary: () => _selectTab(_DashboardTab.library),
         onOpenProfile: () => _selectTab(_DashboardTab.profile),
       ),
       SafeArea(
@@ -161,18 +156,13 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       ),
       SafeArea(
         bottom: false,
-        child: CollectionWishlistScreen(
-          refreshSeed: _refreshSeed,
-        ),
+        child: CollectionWishlistScreen(refreshSeed: _refreshSeed),
       ),
       SafeArea(
         bottom: false,
         child: CollectionProfileScreen(
           refreshSeed: _refreshSeed,
           onProfileChanged: _refreshCollectionViews,
-          onOpenHome: () => _selectTab(_DashboardTab.home),
-          onOpenLibrary: () => _selectTab(_DashboardTab.library),
-          onOpenWishlist: () => _selectTab(_DashboardTab.wishlist),
           onAddItem: _openManualAddFlow,
           onSignOut: widget.onSignOut,
         ),
@@ -192,10 +182,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                 gradient: RadialGradient(
                   center: Alignment.topCenter,
                   radius: 1.3,
-                  colors: [
-                    AppColors.dashboardGlow,
-                    AppColors.background,
-                  ],
+                  colors: [AppColors.dashboardGlow, AppColors.background],
                 ),
               ),
             ),
@@ -210,10 +197,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
             top: 0,
             left: 0,
             right: 0,
-            child: SafeArea(
-              bottom: false,
-              child: ArchiveSyncStatusBanner(),
-            ),
+            child: SafeArea(bottom: false, child: ArchiveSyncStatusBanner()),
           ),
         ],
       ),
@@ -281,78 +265,39 @@ class _AddToCollectionSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(32),
-        ),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.md,
-            AppSpacing.lg,
-            AppSpacing.lg,
+    return CollectorBottomSheet(
+      title: 'Add to Collection',
+      description: 'Choose the add flow that fits the item in front of you.',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _AddEntryOptionTile(
+            icon: Icons.qr_code_scanner_rounded,
+            title: 'Scan barcode',
+            helperText: 'best for boxed items with a visible barcode',
+            tone: AppColors.primary,
+            onTap: onScanBarcode,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Add to Collection',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'Choose the add flow that fits the item in front of you.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.onSurfaceVariant,
-                    ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              _AddEntryOptionTile(
-                icon: Icons.qr_code_scanner_rounded,
-                title: 'Scan barcode',
-                helperText: 'best for boxed items with a visible barcode',
-                tone: AppColors.primary,
-                onTap: onScanBarcode,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              _AddEntryOptionTile(
-                icon: Icons.auto_awesome_rounded,
-                title: 'Identify with AI',
-                helperText:
-                    'best for comics, loose items, rare pieces, and barcode-less collectibles',
-                tone: AppColors.tertiary,
-                premium: true,
-                onTap: onIdentifyWithAi,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              _AddEntryOptionTile(
-                icon: Icons.add_photo_alternate_outlined,
-                title: 'Add manually',
-                helperText:
-                    'best for loose, vintage, custom, rare, or barcode-less collectibles',
-                tone: AppColors.secondary,
-                onTap: onAddManually,
-              ),
-            ],
+          const SizedBox(height: AppSpacing.md),
+          _AddEntryOptionTile(
+            icon: Icons.auto_awesome_rounded,
+            title: 'Identify with AI',
+            helperText:
+                'best for comics, loose items, rare pieces, and barcode-less collectibles',
+            tone: AppColors.tertiary,
+            premium: true,
+            onTap: onIdentifyWithAi,
           ),
-        ),
+          const SizedBox(height: AppSpacing.md),
+          _AddEntryOptionTile(
+            icon: Icons.add_photo_alternate_outlined,
+            title: 'Add manually',
+            helperText:
+                'best for loose, vintage, custom, rare, or barcode-less collectibles',
+            tone: AppColors.secondary,
+            onTap: onAddManually,
+          ),
+        ],
       ),
     );
   }
@@ -422,11 +367,7 @@ class _AddEntryOptionTile extends StatelessWidget {
                     color: tone.withValues(alpha: 0.14),
                     borderRadius: BorderRadius.circular(18),
                   ),
-                  child: Icon(
-                    icon,
-                    color: tone,
-                    size: 24,
-                  ),
+                  child: Icon(icon, color: tone, size: 24),
                 ),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
@@ -435,27 +376,23 @@ class _AddEntryOptionTile extends StatelessWidget {
                     children: [
                       Text(
                         title,
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              color: premium ? AppColors.white : null,
-                            ),
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(color: premium ? AppColors.white : null),
                       ),
                       const SizedBox(height: AppSpacing.xs),
                       Text(
                         helperText,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: premium
-                                  ? AppColors.white.withValues(alpha: 0.82)
-                                  : AppColors.onSurfaceVariant,
-                            ),
+                          color: premium
+                              ? AppColors.white.withValues(alpha: 0.82)
+                              : AppColors.onSurfaceVariant,
+                        ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: AppSpacing.sm),
-                Icon(
-                  Icons.arrow_forward_rounded,
-                  color: tone,
-                ),
+                Icon(Icons.arrow_forward_rounded, color: tone),
               ],
             ),
           ),

@@ -9,7 +9,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_fonts.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
-import '../widgets/archive_photo_view.dart';
+import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
@@ -17,7 +17,6 @@ import '../widgets/collector_section_header.dart';
 import '../widgets/collector_text_field.dart';
 import '../widgets/resolved_avatar_image.dart';
 import 'category_collection_screen.dart';
-import 'collectible_detail_screen.dart';
 
 const _homeTopChromeColor = AppColors.dashboardGlow;
 
@@ -29,6 +28,7 @@ class CollectionHomeScreen extends StatefulWidget {
     required this.onAddFirstItem,
     required this.onScanItem,
     required this.onOpenSearch,
+    required this.onOpenLibrary,
     required this.onOpenProfile,
   });
 
@@ -37,6 +37,7 @@ class CollectionHomeScreen extends StatefulWidget {
   final VoidCallback onAddFirstItem;
   final VoidCallback onScanItem;
   final VoidCallback onOpenSearch;
+  final VoidCallback onOpenLibrary;
   final VoidCallback onOpenProfile;
 
   @override
@@ -114,6 +115,7 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
                   collectibles: data.collectibles,
                   onCollectionChanged: _reload,
                   onOpenSearch: widget.onOpenSearch,
+                  onOpenLibrary: widget.onOpenLibrary,
                   onOpenProfile: widget.onOpenProfile,
                 ),
               ],
@@ -131,6 +133,7 @@ class _LoadedHomeState extends StatefulWidget {
     required this.collectibles,
     required this.onCollectionChanged,
     required this.onOpenSearch,
+    required this.onOpenLibrary,
     required this.onOpenProfile,
   });
 
@@ -138,6 +141,7 @@ class _LoadedHomeState extends StatefulWidget {
   final List<CollectibleModel> collectibles;
   final Future<void> Function() onCollectionChanged;
   final VoidCallback onOpenSearch;
+  final VoidCallback onOpenLibrary;
   final VoidCallback onOpenProfile;
 
   @override
@@ -208,11 +212,18 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
               children: [
                 CollectorSectionHeader(
                   title: 'Categories',
-                  trailing: Text(
-                    'From Your Collection',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.labelLarge?.copyWith(color: AppColors.primary),
+                  trailing: TextButton(
+                    onPressed: widget.onOpenLibrary,
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.primary,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.sm,
+                        vertical: AppSpacing.xs,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('View all'),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.md),
@@ -296,23 +307,25 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                   )
                 else
                   SizedBox(
-                    height: compactLayout ? 216 : 244,
+                    height: compactLayout ? 162 : 174,
                     child: ListView.separated(
                       clipBehavior: Clip.none,
                       scrollDirection: Axis.horizontal,
                       itemCount: recentItems.length,
                       separatorBuilder: (_, _) =>
-                          const SizedBox(width: AppSpacing.md),
+                          const SizedBox(width: AppSpacing.sm),
                       itemBuilder: (context, index) {
                         final item = recentItems[index];
                         final photoRef = item.id == null
                             ? null
                             : widget.data.photoRefsByCollectibleId[item.id];
-                        return _RecentCollectibleCard(
-                          collectible: item,
-                          photoRef: photoRef,
-                          compactLayout: compactLayout,
-                          onCollectionChanged: widget.onCollectionChanged,
+                        return SizedBox(
+                          width: compactLayout ? 116 : 124,
+                          child: CollectibleGridCard(
+                            collectible: item,
+                            photoRef: photoRef,
+                            onCollectionChanged: widget.onCollectionChanged,
+                          ),
                         );
                       },
                     ),
@@ -336,23 +349,25 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                   )
                 else
                   SizedBox(
-                    height: compactLayout ? 216 : 244,
+                    height: compactLayout ? 162 : 174,
                     child: ListView.separated(
                       clipBehavior: Clip.none,
                       scrollDirection: Axis.horizontal,
                       itemCount: favoriteItems.length,
                       separatorBuilder: (_, _) =>
-                          const SizedBox(width: AppSpacing.md),
+                          const SizedBox(width: AppSpacing.sm),
                       itemBuilder: (context, index) {
                         final item = favoriteItems[index];
                         final photoRef = item.id == null
                             ? null
                             : widget.data.photoRefsByCollectibleId[item.id];
-                        return _RecentCollectibleCard(
-                          collectible: item,
-                          photoRef: photoRef,
-                          compactLayout: compactLayout,
-                          onCollectionChanged: widget.onCollectionChanged,
+                        return SizedBox(
+                          width: compactLayout ? 116 : 124,
+                          child: CollectibleGridCard(
+                            collectible: item,
+                            photoRef: photoRef,
+                            onCollectionChanged: widget.onCollectionChanged,
+                          ),
                         );
                       },
                     ),
@@ -924,123 +939,6 @@ bool _categoryCardShouldCenterForIndex({
   return itemCount > 1 && itemCount.isOdd && index == itemCount - 1;
 }
 
-class _RecentCollectibleCard extends StatelessWidget {
-  const _RecentCollectibleCard({
-    required this.collectible,
-    required this.photoRef,
-    required this.compactLayout,
-    required this.onCollectionChanged,
-  });
-
-  final CollectibleModel collectible;
-  final ArchivePhotoRef? photoRef;
-  final bool compactLayout;
-  final Future<void> Function() onCollectionChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: compactLayout ? 164 : 188,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(24),
-          onTap: () async {
-            final changed = await Navigator.of(context).push<bool>(
-              MaterialPageRoute<bool>(
-                builder: (_) => CollectibleDetailScreen(
-                  collectible: collectible,
-                  photoRef: photoRef,
-                ),
-              ),
-            );
-
-            if (changed == true) {
-              await onCollectionChanged();
-            }
-          },
-          child: Container(
-            decoration: BoxDecoration(
-              color: AppColors.surfaceContainer,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: AppColors.outlineVariant.withValues(alpha: 0.18),
-              ),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  ArchivePhotoView(
-                    photoRef: photoRef,
-                    fit: BoxFit.cover,
-                    placeholder: Container(
-                      color: AppColors.surfaceContainerHighest,
-                      child: const Center(
-                        child: Icon(
-                          Icons.photo_outlined,
-                          color: AppColors.onSurfaceVariant,
-                          size: 40,
-                        ),
-                      ),
-                    ),
-                    error: const SizedBox.shrink(),
-                  ),
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          AppColors.background.withValues(alpha: 0.82),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: compactLayout ? AppSpacing.xs : AppSpacing.sm,
-                    right: compactLayout ? AppSpacing.xs : AppSpacing.sm,
-                    bottom: compactLayout ? AppSpacing.xs : AppSpacing.sm,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          collectible.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: compactLayout
-                              ? Theme.of(context).textTheme.titleSmall
-                                    ?.copyWith(fontSize: 15, height: 1.1)
-                              : Theme.of(context).textTheme.titleMedium
-                                    ?.copyWith(fontSize: 17, height: 1.1),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          collectible.category,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                fontSize: compactLayout ? 11 : 12,
-                                height: 1.2,
-                                color: AppColors.onSurfaceVariant,
-                              ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _InlineMessagePanel extends StatelessWidget {
   const _InlineMessagePanel({required this.title, required this.description});
 
@@ -1178,7 +1076,6 @@ class _HomeMessageState extends StatelessWidget {
     );
   }
 }
-
 
 class _CategoryHighlight {
   const _CategoryHighlight({

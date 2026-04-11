@@ -13,6 +13,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_panel.dart';
+import '../widgets/collector_sticky_back_button.dart';
 import 'manual_add_collectible_screen.dart';
 
 enum _AiPhotoPhase { idle, identifying, found, notFound, failed }
@@ -188,10 +189,7 @@ class _AiPhotoIdentificationScreenState
                 gradient: RadialGradient(
                   center: Alignment.topCenter,
                   radius: 1.25,
-                  colors: [
-                    AppColors.componentLibraryGlow,
-                    AppColors.background,
-                  ],
+                  colors: [AppColors.aiPhotoGlow, AppColors.background],
                 ),
               ),
             ),
@@ -222,12 +220,7 @@ class _AiPhotoIdentificationScreenState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  CollectorButton(
-                    label: 'Back',
-                    onPressed: () => Navigator.of(context).pop(),
-                    variant: CollectorButtonVariant.icon,
-                    icon: Icons.arrow_back_rounded,
-                  ),
+                  const SizedBox(height: 48),
                   if ((widget.seedBarcode ?? '').isNotEmpty) ...[
                     const SizedBox(height: AppSpacing.md),
                     _SeedBarcodeBanner(barcode: widget.seedBarcode!),
@@ -243,9 +236,7 @@ class _AiPhotoIdentificationScreenState
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _PremiumImageStage(
-                              selectedImage: _selectedImage,
-                            ),
+                            _PremiumImageStage(selectedImage: _selectedImage),
                             const SizedBox(height: AppSpacing.lg),
                             Wrap(
                               spacing: AppSpacing.md,
@@ -364,6 +355,9 @@ class _AiPhotoIdentificationScreenState
                 ],
               ),
             ),
+          ),
+          CollectorStickyBackButton(
+            onPressed: () => Navigator.of(context).pop(),
           ),
         ],
       ),
@@ -674,9 +668,9 @@ class _AiResultCard extends StatelessWidget {
                       ),
                       child: Text(
                         'Suggested photo',
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: Colors.white,
-                        ),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.labelLarge?.copyWith(color: Colors.white),
                       ),
                     ),
                   ),

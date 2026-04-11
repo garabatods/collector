@@ -14,15 +14,17 @@ import '../features/collection/data/repositories/tags_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_radii.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_panel.dart';
+import '../widgets/collector_snack_bar.dart';
+import '../widgets/collector_sticky_back_button.dart';
 import '../widgets/collector_text_field.dart';
 
 const _formHeaderBottomSpacing = AppSpacing.xl;
 const _formSectionSpacing = 40.0;
 const _formPanelContentSpacing = AppSpacing.md;
 const _visibleSuggestionCount = 5;
-const _createValueSentinel = '__create_value__';
 
 class ManualAddCollectibleScreen extends StatefulWidget {
   const ManualAddCollectibleScreen({
@@ -113,6 +115,7 @@ class _ManualAddCollectibleScreenState
   bool _isSaving = false;
   String? _titleError;
   String? _categoryError;
+  List<String> _savedCategories = const [];
   List<String> _topBrands = const [];
   List<String> _moreBrands = const [];
   List<TagModel> _availableTags = const [];
@@ -232,20 +235,6 @@ class _ManualAddCollectibleScreenState
       _titleController.text = identificationResult.title;
     }
 
-    final suggestedCategory = identificationResult.suggestedCategory;
-    if (suggestedCategory != null && suggestedCategory.isNotEmpty) {
-      if (_topCategories.contains(suggestedCategory)) {
-        _selectedCategory = suggestedCategory;
-        _useCustomCategory = false;
-      } else if (_moreCategories.contains(suggestedCategory)) {
-        _selectedCategory = suggestedCategory;
-        _useCustomCategory = false;
-      } else {
-        _customCategoryController.text = suggestedCategory;
-        _useCustomCategory = true;
-      }
-    }
-
     if (((_selectedBrand ?? '').trim().isEmpty) &&
         (identificationResult.brand ?? '').trim().isNotEmpty) {
       _selectedBrand = identificationResult.brand!.trim();
@@ -293,7 +282,6 @@ class _ManualAddCollectibleScreenState
     _setIfEmpty(_releaseYearController, autofillResult.releaseYear?.toString());
     _setIfEmpty(_issueNumberController, autofillResult.issueNumber);
 
-    _applyResolvedCategory(autofillResult.category);
     _applyResolvedBrand(autofillResult.brandOrPublisher);
     _applyTagSuggestions(autofillResult);
 
@@ -312,21 +300,42 @@ class _ManualAddCollectibleScreenState
         return;
       }
 
-      final counts = <String, int>{};
+      final categoryCounts = <String, int>{};
+      final brandCounts = <String, int>{};
       for (final item in collectibles) {
+        final category = item.category.trim();
+        if (category.isNotEmpty) {
+          categoryCounts.update(
+            category,
+            (value) => value + 1,
+            ifAbsent: () => 1,
+          );
+        }
+
         final brand = (item.brand ?? '').trim();
         if (brand.isEmpty) {
           continue;
         }
 
-        counts.update(brand, (value) => value + 1, ifAbsent: () => 1);
+        brandCounts.update(brand, (value) => value + 1, ifAbsent: () => 1);
       }
 
-      final sortedBrands = counts.entries.toList()
-        ..sort((a, b) {
-          final byCount = b.value.compareTo(a.value);
-          return byCount == 0 ? a.key.compareTo(b.key) : byCount;
-        });
+      int sortByCountThenName(
+        MapEntry<String, int> a,
+        MapEntry<String, int> b,
+      ) {
+        final byCount = b.value.compareTo(a.value);
+        return byCount == 0 ? a.key.compareTo(b.key) : byCount;
+      }
+
+      final sortedCategories = categoryCounts.entries.toList()
+        ..sort(sortByCountThenName);
+      final sortedBrands = brandCounts.entries.toList()
+        ..sort(sortByCountThenName);
+
+      final savedCategories = sortedCategories
+          .map((entry) => entry.key)
+          .toList(growable: false);
 
       final brands = sortedBrands
           .map((entry) => entry.key)
@@ -337,12 +346,30 @@ class _ManualAddCollectibleScreenState
       final moreBrands = brands
           .skip(_visibleSuggestionCount)
           .toList(growable: false);
+      final pendingCategory = _useCustomCategory
+          ? _customCategoryController.text.trim()
+          : (_selectedCategory ?? '').trim();
       final pendingBrand = (_selectedBrand ?? '').trim();
 
       setState(() {
+        _savedCategories = savedCategories;
         _topBrands = topBrands;
         _moreBrands = moreBrands;
         _availableTags = tags;
+
+        if (pendingCategory.isNotEmpty) {
+          final existingCategory = savedCategories.cast<String?>().firstWhere(
+            (category) =>
+                (category ?? '').trim().toLowerCase() ==
+                pendingCategory.toLowerCase(),
+            orElse: () => null,
+          );
+          if (existingCategory != null) {
+            _selectedCategory = existingCategory;
+            _useCustomCategory = false;
+            _customCategoryController.clear();
+          }
+        }
 
         if (pendingBrand.isEmpty) {
           return;
@@ -362,6 +389,7 @@ class _ManualAddCollectibleScreenState
       }
 
       setState(() {
+        _savedCategories = const [];
         _topBrands = const [];
         _moreBrands = const [];
         _availableTags = const [];
@@ -391,28 +419,9 @@ class _ManualAddCollectibleScreenState
       _selectedCategory = category;
       _customCategoryController.clear();
       _categoryError = null;
-    });
-  }
-
-  Future<void> _openCustomCategorySheet() async {
-    final value = await _showValueInputSheet(
-      title: 'Add category',
-      description: 'Create a category when the preset list does not fit.',
-      fieldLabel: 'Category name',
-      fieldHint: 'Vintage posters',
-      submitLabel: 'Save category',
-      initialValue: _useCustomCategory ? _customCategoryController.text : '',
-    );
-
-    if (!mounted || value == null) {
-      return;
-    }
-
-    setState(() {
-      _customCategoryController.text = value;
-      _useCustomCategory = true;
-      _selectedCategory = null;
-      _categoryError = null;
+      _formMode = _isComicCategory(category)
+          ? AddItemFormMode.comic
+          : AddItemFormMode.general;
     });
   }
 
@@ -421,36 +430,6 @@ class _ManualAddCollectibleScreenState
       _useCustomBrand = false;
       _selectedBrand = brand;
       _customBrandController.clear();
-    });
-  }
-
-  Future<void> _openCustomBrandSheet() async {
-    final value = await _showValueInputSheet(
-      title: _isComicMode ? 'Add publisher' : 'Add brand',
-      description: _isComicMode
-          ? 'Create a publisher when the saved suggestions do not fit.'
-          : 'Create a brand when the saved suggestions do not fit.',
-      fieldLabel: _isComicMode ? 'Publisher name' : 'Brand name',
-      fieldHint: _isComicMode ? 'IDW Publishing' : 'McFarlane Toys',
-      submitLabel: _isComicMode ? 'Save publisher' : 'Save brand',
-      initialValue: _useCustomBrand ? _customBrandController.text : '',
-    );
-
-    if (!mounted || value == null) {
-      return;
-    }
-
-    final existingBrand = [..._topBrands, ..._moreBrands]
-        .cast<String?>()
-        .firstWhere(
-          (brand) => (brand ?? '').trim().toLowerCase() == value.toLowerCase(),
-          orElse: () => null,
-        );
-
-    setState(() {
-      _selectedBrand = existingBrand ?? value;
-      _useCustomBrand = existingBrand == null;
-      _customBrandController.text = existingBrand ?? value;
     });
   }
 
@@ -476,75 +455,6 @@ class _ManualAddCollectibleScreenState
     });
   }
 
-  Future<void> _openCreateTagSheet() async {
-    final value = await _showValueInputSheet(
-      title: 'Create a new tag',
-      description: 'Tags help you group the same collectible in multiple ways.',
-      fieldLabel: 'Tag name',
-      fieldHint: 'Display shelf',
-      submitLabel: 'Add tag',
-    );
-
-    if (!mounted || value == null) {
-      return;
-    }
-
-    _addCustomTagValue(value);
-  }
-
-  void _addCustomTagValue(String value) {
-    if (value.isEmpty) {
-      return;
-    }
-
-    TagModel? existingTag;
-    for (final tag in _availableTags) {
-      if (tag.name.trim().toLowerCase() == value.toLowerCase()) {
-        existingTag = tag;
-        break;
-      }
-    }
-
-    setState(() {
-      if (existingTag != null) {
-        final existingId = existingTag.id;
-        if (existingId != null && existingId.isNotEmpty) {
-          _selectedTagIds.add(existingId);
-        }
-      } else if (!_newTagNames.any(
-        (tagName) => tagName.toLowerCase() == value.toLowerCase(),
-      )) {
-        _newTagNames.add(value);
-      }
-    });
-  }
-
-  Future<String?> _showValueInputSheet({
-    required String title,
-    required String description,
-    required String fieldLabel,
-    required String fieldHint,
-    required String submitLabel,
-    String initialValue = '',
-  }) async {
-    return showModalBottomSheet<String>(
-      context: context,
-      useSafeArea: true,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return _ValueInputBottomSheet(
-          title: title,
-          description: description,
-          fieldLabel: fieldLabel,
-          fieldHint: fieldHint,
-          submitLabel: submitLabel,
-          initialValue: initialValue,
-        );
-      },
-    );
-  }
-
   Future<void> _openCategorySelectorSheet() async {
     final selected = await showModalBottomSheet<String>(
       context: context,
@@ -559,15 +469,16 @@ class _ManualAddCollectibleScreenState
         options: _categoryOptions,
         selectedValue: _useCustomCategory ? null : _selectedCategory,
         createActionLabel: 'Create category',
+        createFieldLabel: 'Category name',
+        createFieldHint: 'Display pieces',
+        createSubmitLabel: 'Use category',
+        initialCreateValue: _useCustomCategory
+            ? _customCategoryController.text
+            : '',
       ),
     );
 
     if (!mounted || selected == null) {
-      return;
-    }
-
-    if (selected == _createValueSentinel) {
-      await _openCustomCategorySheet();
       return;
     }
 
@@ -587,16 +498,15 @@ class _ManualAddCollectibleScreenState
         options: _brandOptions,
         selectedValue: _useCustomBrand ? null : _selectedBrand,
         createActionLabel: _isComicMode ? 'Create publisher' : 'Create brand',
+        createFieldLabel: _isComicMode ? 'Publisher name' : 'Brand name',
+        createFieldHint: _isComicMode ? 'Comic publisher' : 'Toy maker',
+        createSubmitLabel: _isComicMode ? 'Use publisher' : 'Use brand',
+        initialCreateValue: _useCustomBrand ? _customBrandController.text : '',
         emptyStateLabel: _brandEmptyLabel,
       ),
     );
 
     if (!mounted || selected == null) {
-      return;
-    }
-
-    if (selected == _createValueSentinel) {
-      await _openCustomBrandSheet();
       return;
     }
 
@@ -628,11 +538,6 @@ class _ManualAddCollectibleScreenState
         ..clear()
         ..addAll(result.newTagNames);
     });
-
-    if (result.createRequested) {
-      await _openCreateTagSheet();
-      return;
-    }
   }
 
   void _adjustQuantity(int delta) {
@@ -647,8 +552,7 @@ class _ManualAddCollectibleScreenState
       if (resolvedComicCategory.isNotEmpty) {
         return resolvedComicCategory;
       }
-      final customComicCategory = _customCategoryController.text.trim();
-      return customComicCategory.isEmpty ? 'Comics' : customComicCategory;
+      return _customCategoryController.text.trim();
     }
 
     if (_useCustomCategory) {
@@ -656,6 +560,10 @@ class _ManualAddCollectibleScreenState
     }
 
     return (_selectedCategory ?? '').trim();
+  }
+
+  bool _isComicCategory(String category) {
+    return category.trim().toLowerCase() == 'comics';
   }
 
   String? _resolvedBrand() {
@@ -680,6 +588,7 @@ class _ManualAddCollectibleScreenState
     ...{
       ..._topCategories,
       ..._moreCategories,
+      ..._savedCategories,
       if ((_selectedCategory ?? '').trim().isNotEmpty) _selectedCategory!,
       if (_useCustomCategory &&
           _customCategoryController.text.trim().isNotEmpty)
@@ -753,24 +662,6 @@ class _ManualAddCollectibleScreenState
       return;
     }
     controller.text = trimmed;
-  }
-
-  void _applyResolvedCategory(ResolvedMatch<String>? resolvedMatch) {
-    final value = resolvedMatch?.resolvedValue?.trim();
-    if (value == null || value.isEmpty) {
-      return;
-    }
-
-    if (resolvedMatch!.hasExistingMatch) {
-      _selectedCategory = value;
-      _useCustomCategory = false;
-      _customCategoryController.clear();
-      return;
-    }
-
-    _selectedCategory = null;
-    _useCustomCategory = true;
-    _customCategoryController.text = value;
   }
 
   void _applyResolvedBrand(ResolvedMatch<String>? resolvedMatch) {
@@ -961,34 +852,34 @@ class _ManualAddCollectibleScreenState
       CollectionVocabularyRepository.invalidateCache();
       Navigator.of(context).pop(true);
 
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            selectedImage == null
-                ? _isEditing
-                      ? 'Collectible updated.'
-                      : 'Collectible added.'
-                : photoUploadFailed
-                ? _isEditing
-                      ? 'Collectible updated, but the photo could not be uploaded.'
-                      : 'Collectible added, but the photo could not be uploaded.'
-                : _isEditing
-                ? 'Collectible and photo updated.'
-                : 'Collectible and photo added.',
-          ),
-        ),
+      CollectorSnackBar.showOn(
+        messenger,
+        message: selectedImage == null
+            ? _isEditing
+                  ? 'Item updated.'
+                  : 'Item added.'
+            : photoUploadFailed
+            ? _isEditing
+                  ? 'Item updated, but the photo could not be uploaded.'
+                  : 'Item added, but the photo could not be uploaded.'
+            : _isEditing
+            ? 'Item and photo updated.'
+            : 'Item and photo added.',
+        tone: photoUploadFailed
+            ? CollectorSnackBarTone.warning
+            : CollectorSnackBarTone.success,
       );
     } catch (_) {
       if (!mounted) {
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Could not add the collectible right now. Please try again.',
-          ),
-        ),
+      CollectorSnackBar.show(
+        context,
+        message: _isEditing
+            ? 'Could not update this item right now. Please try again.'
+            : 'Could not add this item right now. Please try again.',
+        tone: CollectorSnackBarTone.error,
       );
     } finally {
       if (mounted) {
@@ -1031,12 +922,7 @@ class _ManualAddCollectibleScreenState
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        CollectorButton(
-                          label: 'Back',
-                          onPressed: () => Navigator.of(context).pop(),
-                          variant: CollectorButtonVariant.icon,
-                          icon: Icons.arrow_back_rounded,
-                        ),
+                        const SizedBox(height: 48),
                         const SizedBox(height: AppSpacing.md),
                         Text(
                           _screenTitle,
@@ -1118,8 +1004,8 @@ class _ManualAddCollectibleScreenState
                             CollectorTextField(
                               label: 'Title',
                               hintText: _isComicMode
-                                  ? 'Teenage Mutant Ninja Turtles #4'
-                                  : 'Vintage Batman figure',
+                                  ? 'Series title #1'
+                                  : 'Item name or release title',
                               controller: _titleController,
                               errorText: _titleError,
                               textInputAction: TextInputAction.next,
@@ -1131,19 +1017,21 @@ class _ManualAddCollectibleScreenState
                               _SelectionField(
                                 label: 'Category',
                                 value: _resolvedCategoryDisplayValue(),
-                                helperText: 'Detected from identification',
+                                helperText:
+                                    'Change this if the item was classified wrong',
                                 errorText: _categoryError,
-                                actionLabel: 'Locked',
-                                onTap: () {},
-                                isPlaceholder: false,
-                                enabled: false,
+                                actionLabel: 'Choose',
+                                onTap: _openCategorySelectorSheet,
+                                isPlaceholder: _resolvedCategory()
+                                    .trim()
+                                    .isEmpty,
                               ),
                               const SizedBox(height: AppSpacing.md),
                               const _BasicsDivider(),
                               const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
                                 label: 'Series / Volume',
-                                hintText: 'Teenage Mutant Ninja Turtles',
+                                hintText: 'Series or volume title',
                                 controller: _seriesController,
                                 textInputAction: TextInputAction.next,
                               ),
@@ -1152,7 +1040,7 @@ class _ManualAddCollectibleScreenState
                               const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
                                 label: 'Issue number',
-                                hintText: '4',
+                                hintText: '1',
                                 controller: _issueNumberController,
                                 keyboardType: TextInputType.number,
                                 textInputAction: TextInputAction.next,
@@ -1186,7 +1074,7 @@ class _ManualAddCollectibleScreenState
                               const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
                                 label: 'Release year',
-                                hintText: '1985',
+                                hintText: 'YYYY',
                                 controller: _releaseYearController,
                                 keyboardType: TextInputType.number,
                                 textInputAction: TextInputAction.next,
@@ -1248,35 +1136,34 @@ class _ManualAddCollectibleScreenState
                             if (_isComicMode) ...[
                               _TextAreaField(
                                 label: 'Description',
-                                hintText:
-                                    'Leonardo deals with a betrayal in the present day...',
+                                hintText: 'Short synopsis or condition notes.',
                                 controller: _descriptionController,
                               ),
                             ] else ...[
                               CollectorTextField(
                                 label: 'Franchise',
-                                hintText: 'Teenage Mutant Ninja Turtles',
+                                hintText: 'Franchise or theme',
                                 controller: _franchiseController,
                                 textInputAction: TextInputAction.next,
                               ),
                               const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
                                 label: _seriesFieldLabel,
-                                hintText: 'Vintage Collection',
+                                hintText: 'Product line or wave',
                                 controller: _seriesController,
                                 textInputAction: TextInputAction.next,
                               ),
                               const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
                                 label: 'Character / Subject',
-                                hintText: 'Boba Fett',
+                                hintText: 'Character or subject',
                                 controller: _characterController,
                                 textInputAction: TextInputAction.next,
                               ),
                               const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
                                 label: 'Release year',
-                                hintText: '2024',
+                                hintText: 'YYYY',
                                 controller: _releaseYearController,
                                 keyboardType: TextInputType.number,
                                 textInputAction: TextInputAction.next,
@@ -1285,7 +1172,7 @@ class _ManualAddCollectibleScreenState
                               _TextAreaField(
                                 label: 'Description',
                                 hintText:
-                                    'Loose figure with soft goods cape and blaster.',
+                                    'Notes about condition, accessories, or packaging.',
                                 controller: _descriptionController,
                               ),
                             ],
@@ -1389,8 +1276,8 @@ class _ManualAddCollectibleScreenState
                             CollectorTextField(
                               label: 'Notes',
                               hintText: _isComicMode
-                                  ? 'Raw copy, light spine ticks, bagged and boarded.'
-                                  : 'Loose item, complete accessories.',
+                                  ? 'Condition, storage, or grading notes.'
+                                  : 'Condition, accessories, or shelf notes.',
                               controller: _notesController,
                               textInputAction: TextInputAction.done,
                             ),
@@ -1411,6 +1298,9 @@ class _ManualAddCollectibleScreenState
                 ),
               ],
             ),
+          ),
+          CollectorStickyBackButton(
+            onPressed: () => Navigator.of(context).pop(),
           ),
         ],
       ),
@@ -1766,7 +1656,6 @@ class _SelectionField extends StatelessWidget {
     required this.onTap,
     this.errorText,
     this.isPlaceholder = false,
-    this.enabled = true,
   });
 
   final String label;
@@ -1776,7 +1665,6 @@ class _SelectionField extends StatelessWidget {
   final VoidCallback onTap;
   final String? errorText;
   final bool isPlaceholder;
-  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -1785,22 +1673,18 @@ class _SelectionField extends StatelessWidget {
       children: [
         Text(
           label.toUpperCase(),
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            color: enabled
-                ? AppColors.onSurfaceVariant
-                : AppColors.onSurfaceVariant.withValues(alpha: 0.7),
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.labelSmall?.copyWith(color: AppColors.onSurfaceVariant),
         ),
         const SizedBox(height: AppSpacing.xs),
         InkWell(
-          onTap: enabled ? onTap : null,
+          onTap: onTap,
           borderRadius: AppRadii.medium,
           child: Ink(
             padding: const EdgeInsets.all(AppSpacing.md),
             decoration: BoxDecoration(
-              color: enabled
-                  ? AppColors.surfaceContainerHighest.withValues(alpha: 0.4)
-                  : AppColors.surfaceContainerHighest.withValues(alpha: 0.24),
+              color: AppColors.surfaceContainerHighest.withValues(alpha: 0.4),
               borderRadius: AppRadii.medium,
               border: Border.all(
                 color: (errorText ?? '').isNotEmpty
@@ -1836,16 +1720,11 @@ class _SelectionField extends StatelessWidget {
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 TextButton.icon(
-                  onPressed: enabled ? onTap : null,
+                  onPressed: onTap,
                   style: TextButton.styleFrom(
-                    foregroundColor: enabled
-                        ? AppColors.primary
-                        : AppColors.onSurfaceVariant,
+                    foregroundColor: AppColors.primary,
                   ),
-                  icon: Icon(
-                    enabled ? Icons.search_rounded : Icons.lock_outline_rounded,
-                    size: 16,
-                  ),
+                  icon: const Icon(Icons.search_rounded, size: 16),
                   label: Text(actionLabel),
                 ),
               ],
@@ -1857,7 +1736,7 @@ class _SelectionField extends StatelessWidget {
   }
 }
 
-class _TextAreaField extends StatelessWidget {
+class _TextAreaField extends StatefulWidget {
   const _TextAreaField({
     required this.label,
     required this.hintText,
@@ -1869,23 +1748,82 @@ class _TextAreaField extends StatelessWidget {
   final TextEditingController controller;
 
   @override
+  State<_TextAreaField> createState() => _TextAreaFieldState();
+}
+
+class _TextAreaFieldState extends State<_TextAreaField> {
+  late final FocusNode _focusNode;
+
+  bool get _shouldShowClearButton {
+    return _focusNode.hasFocus && widget.controller.text.isNotEmpty;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+    _focusNode.addListener(_handleInputStateChanged);
+    widget.controller.addListener(_handleInputStateChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _TextAreaField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller == widget.controller) {
+      return;
+    }
+
+    oldWidget.controller.removeListener(_handleInputStateChanged);
+    widget.controller.addListener(_handleInputStateChanged);
+  }
+
+  @override
+  void dispose() {
+    _focusNode
+      ..removeListener(_handleInputStateChanged)
+      ..dispose();
+    widget.controller.removeListener(_handleInputStateChanged);
+    super.dispose();
+  }
+
+  void _handleInputStateChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _clearText() {
+    widget.controller.clear();
+    _focusNode.requestFocus();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          label.toUpperCase(),
+          widget.label.toUpperCase(),
           style: Theme.of(context).textTheme.labelSmall,
         ),
         const SizedBox(height: AppSpacing.xs),
         TextField(
-          controller: controller,
+          controller: widget.controller,
+          focusNode: _focusNode,
           minLines: 3,
           maxLines: 5,
           textInputAction: TextInputAction.newline,
           decoration: InputDecoration(
-            hintText: hintText,
+            hintText: widget.hintText,
             alignLabelWithHint: true,
+            suffixIcon: _shouldShowClearButton
+                ? IconButton(
+                    tooltip: 'Clear',
+                    onPressed: _clearText,
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    color: AppColors.onSurfaceVariant,
+                  )
+                : null,
             contentPadding: const EdgeInsets.symmetric(
               horizontal: AppSpacing.md,
               vertical: AppSpacing.md,
@@ -1962,6 +1900,10 @@ class _OptionSearchBottomSheet extends StatefulWidget {
     required this.options,
     required this.selectedValue,
     required this.createActionLabel,
+    required this.createFieldLabel,
+    required this.createFieldHint,
+    required this.createSubmitLabel,
+    this.initialCreateValue = '',
     this.emptyStateLabel,
   });
 
@@ -1971,6 +1913,10 @@ class _OptionSearchBottomSheet extends StatefulWidget {
   final List<String> options;
   final String? selectedValue;
   final String createActionLabel;
+  final String createFieldLabel;
+  final String createFieldHint;
+  final String createSubmitLabel;
+  final String initialCreateValue;
   final String? emptyStateLabel;
 
   @override
@@ -1980,12 +1926,49 @@ class _OptionSearchBottomSheet extends StatefulWidget {
 
 class _OptionSearchBottomSheetState extends State<_OptionSearchBottomSheet> {
   final _searchController = TextEditingController();
+  late final TextEditingController _createController;
   String _query = '';
+  String? _createErrorText;
+  var _showCreatePanel = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _createController = TextEditingController(text: widget.initialCreateValue);
+  }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _createController.dispose();
     super.dispose();
+  }
+
+  void _showCreate() {
+    setState(() {
+      _showCreatePanel = true;
+      _createErrorText = null;
+      if (_createController.text.trim().isEmpty && _query.trim().isNotEmpty) {
+        _createController.text = _query.trim();
+      }
+    });
+  }
+
+  void _submitCreatedValue(List<String> normalizedOptions) {
+    final value = _createController.text.trim();
+    if (value.isEmpty) {
+      setState(() {
+        _createErrorText = '${widget.createFieldLabel} is required.';
+      });
+      return;
+    }
+
+    final existingValue = normalizedOptions.cast<String?>().firstWhere(
+      (option) => (option ?? '').trim().toLowerCase() == value.toLowerCase(),
+      orElse: () => null,
+    );
+
+    Navigator.of(context).pop(existingValue ?? value);
   }
 
   @override
@@ -2020,7 +2003,26 @@ class _OptionSearchBottomSheetState extends State<_OptionSearchBottomSheet> {
           _SheetActionRow(
             label: widget.createActionLabel,
             icon: Icons.add_rounded,
-            onTap: () => Navigator.of(context).pop(_createValueSentinel),
+            onTap: _showCreate,
+          ),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: _showCreatePanel
+                ? Padding(
+                    key: const ValueKey('create-option-panel'),
+                    padding: const EdgeInsets.only(top: AppSpacing.sm),
+                    child: _InlineCreatePanel(
+                      fieldLabel: widget.createFieldLabel,
+                      fieldHint: widget.createFieldHint,
+                      submitLabel: widget.createSubmitLabel,
+                      controller: _createController,
+                      errorText: _createErrorText,
+                      onSubmit: () => _submitCreatedValue(normalizedOptions),
+                    ),
+                  )
+                : const SizedBox.shrink(),
           ),
           const SizedBox(height: AppSpacing.sm),
           ConstrainedBox(
@@ -2076,14 +2078,62 @@ class _TagSearchBottomSheet extends StatefulWidget {
 
 class _TagSearchBottomSheetState extends State<_TagSearchBottomSheet> {
   final _searchController = TextEditingController();
+  final _createController = TextEditingController();
   late final Set<String> _workingSelection = {...widget.selectedTagIds};
   late final List<String> _workingNewTagNames = [...widget.newTagNames];
   String _query = '';
+  String? _createErrorText;
+  var _showCreatePanel = false;
 
   @override
   void dispose() {
     _searchController.dispose();
+    _createController.dispose();
     super.dispose();
+  }
+
+  void _showCreate() {
+    setState(() {
+      _showCreatePanel = true;
+      _createErrorText = null;
+      if (_createController.text.trim().isEmpty && _query.trim().isNotEmpty) {
+        _createController.text = _query.trim();
+      }
+    });
+  }
+
+  void _submitCreatedTag() {
+    final value = _createController.text.trim();
+    if (value.isEmpty) {
+      setState(() {
+        _createErrorText = 'Tag name is required.';
+      });
+      return;
+    }
+
+    TagModel? existingTag;
+    for (final tag in widget.availableTags) {
+      if (tag.name.trim().toLowerCase() == value.toLowerCase()) {
+        existingTag = tag;
+        break;
+      }
+    }
+
+    setState(() {
+      final existingTagId = existingTag?.id;
+      if (existingTagId != null && existingTagId.isNotEmpty) {
+        _workingSelection.add(existingTagId);
+      } else if (!_workingNewTagNames.any(
+        (tagName) => tagName.toLowerCase() == value.toLowerCase(),
+      )) {
+        _workingNewTagNames.add(value);
+      }
+
+      _createController.clear();
+      _createErrorText = null;
+      _query = '';
+      _searchController.clear();
+    });
   }
 
   @override
@@ -2104,6 +2154,15 @@ class _TagSearchBottomSheetState extends State<_TagSearchBottomSheet> {
       title: 'Choose tags',
       description:
           'Search, toggle, or create tags without opening a giant chip wall.',
+      footer: SizedBox(
+        width: double.infinity,
+        child: CollectorButton(
+          label: 'Apply tags',
+          onPressed: () => Navigator.of(context).pop(
+            _TagPickerSheetResult.apply(_workingSelection, _workingNewTagNames),
+          ),
+        ),
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2121,12 +2180,26 @@ class _TagSearchBottomSheetState extends State<_TagSearchBottomSheet> {
           _SheetActionRow(
             label: 'Create tag',
             icon: Icons.add_rounded,
-            onTap: () => Navigator.of(context).pop(
-              _TagPickerSheetResult.create(
-                _workingSelection,
-                _workingNewTagNames,
-              ),
-            ),
+            onTap: _showCreate,
+          ),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: _showCreatePanel
+                ? Padding(
+                    key: const ValueKey('create-tag-panel'),
+                    padding: const EdgeInsets.only(top: AppSpacing.sm),
+                    child: _InlineCreatePanel(
+                      fieldLabel: 'Tag name',
+                      fieldHint: 'Display shelf',
+                      submitLabel: 'Add tag',
+                      controller: _createController,
+                      errorText: _createErrorText,
+                      onSubmit: _submitCreatedTag,
+                    ),
+                  )
+                : const SizedBox.shrink(),
           ),
           const SizedBox(height: AppSpacing.sm),
           if (_workingNewTagNames.isNotEmpty) ...[
@@ -2196,19 +2269,6 @@ class _TagSearchBottomSheetState extends State<_TagSearchBottomSheet> {
                     },
                   ),
           ),
-          const SizedBox(height: AppSpacing.md),
-          SizedBox(
-            width: double.infinity,
-            child: CollectorButton(
-              label: 'Apply tags',
-              onPressed: () => Navigator.of(context).pop(
-                _TagPickerSheetResult.apply(
-                  _workingSelection,
-                  _workingNewTagNames,
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -2219,7 +2279,6 @@ class _TagPickerSheetResult {
   const _TagPickerSheetResult({
     required this.selectedTagIds,
     required this.newTagNames,
-    required this.createRequested,
   });
 
   factory _TagPickerSheetResult.apply(
@@ -2229,24 +2288,11 @@ class _TagPickerSheetResult {
     return _TagPickerSheetResult(
       selectedTagIds: {...selectedTagIds},
       newTagNames: [...newTagNames],
-      createRequested: false,
-    );
-  }
-
-  factory _TagPickerSheetResult.create(
-    Set<String> selectedTagIds,
-    List<String> newTagNames,
-  ) {
-    return _TagPickerSheetResult(
-      selectedTagIds: {...selectedTagIds},
-      newTagNames: [...newTagNames],
-      createRequested: true,
     );
   }
 
   final Set<String> selectedTagIds;
   final List<String> newTagNames;
-  final bool createRequested;
 }
 
 class _SelectionBottomSheetShell extends StatelessWidget {
@@ -2254,57 +2300,21 @@ class _SelectionBottomSheetShell extends StatelessWidget {
     required this.title,
     required this.description,
     required this.child,
+    this.footer,
   });
 
   final String title;
   final String description;
   final Widget child;
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-            AppSpacing.lg,
-            AppSpacing.md,
-            AppSpacing.lg,
-            AppSpacing.lg + MediaQuery.of(context).viewInsets.bottom,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(title, style: Theme.of(context).textTheme.headlineSmall),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                description,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              child,
-            ],
-          ),
-        ),
-      ),
+    return CollectorBottomSheet(
+      title: title,
+      description: description,
+      footer: footer,
+      child: child,
     );
   }
 }
@@ -2327,6 +2337,56 @@ class _SheetActionRow extends StatelessWidget {
       selected: false,
       leadingIcon: icon,
       onTap: onTap,
+    );
+  }
+}
+
+class _InlineCreatePanel extends StatelessWidget {
+  const _InlineCreatePanel({
+    required this.fieldLabel,
+    required this.fieldHint,
+    required this.submitLabel,
+    required this.controller,
+    required this.onSubmit,
+    this.errorText,
+  });
+
+  final String fieldLabel;
+  final String fieldHint;
+  final String submitLabel;
+  final TextEditingController controller;
+  final VoidCallback onSubmit;
+  final String? errorText;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.36),
+        borderRadius: AppRadii.medium,
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.24)),
+      ),
+      child: Column(
+        children: [
+          CollectorTextField(
+            label: fieldLabel,
+            hintText: fieldHint,
+            controller: controller,
+            errorText: errorText,
+            textInputAction: TextInputAction.done,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          SizedBox(
+            width: double.infinity,
+            child: CollectorButton(
+              label: submitLabel,
+              onPressed: onSubmit,
+              variant: CollectorButtonVariant.secondary,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2662,127 +2722,6 @@ class _SingleSelectChoiceChip extends StatelessWidget {
                 ),
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ValueInputBottomSheet extends StatefulWidget {
-  const _ValueInputBottomSheet({
-    required this.title,
-    required this.description,
-    required this.fieldLabel,
-    required this.fieldHint,
-    required this.submitLabel,
-    this.initialValue = '',
-  });
-
-  final String title;
-  final String description;
-  final String fieldLabel;
-  final String fieldHint;
-  final String submitLabel;
-  final String initialValue;
-
-  @override
-  State<_ValueInputBottomSheet> createState() => _ValueInputBottomSheetState();
-}
-
-class _ValueInputBottomSheetState extends State<_ValueInputBottomSheet> {
-  late final TextEditingController _controller;
-  String? _errorText;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: widget.initialValue);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    final value = _controller.text.trim();
-    if (value.isEmpty) {
-      setState(() {
-        _errorText = '${widget.fieldLabel} is required.';
-      });
-      return;
-    }
-
-    Navigator.of(context).pop(value);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-    final bottomPadding = keyboardInset == 0 ? AppSpacing.lg : AppSpacing.md;
-
-    return Padding(
-      padding: EdgeInsets.only(bottom: keyboardInset),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: AppColors.surfaceContainerHigh,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-        ),
-        child: SafeArea(
-          top: false,
-          child: SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(
-              AppSpacing.lg,
-              AppSpacing.md,
-              AppSpacing.lg,
-              bottomPadding,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 44,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: AppColors.outlineVariant.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                Text(
-                  widget.title,
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  widget.description,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                CollectorTextField(
-                  label: widget.fieldLabel,
-                  hintText: widget.fieldHint,
-                  controller: _controller,
-                  errorText: _errorText,
-                  textInputAction: TextInputAction.done,
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                SizedBox(
-                  width: double.infinity,
-                  child: CollectorButton(
-                    label: widget.submitLabel,
-                    onPressed: _submit,
-                  ),
-                ),
-              ],
-            ),
           ),
         ),
       ),
