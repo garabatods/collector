@@ -19,9 +19,14 @@ import 'manual_add_collectible_screen.dart';
 enum _AiPhotoPhase { idle, identifying, found, notFound, failed }
 
 class AiPhotoIdentificationScreen extends StatefulWidget {
-  const AiPhotoIdentificationScreen({super.key, this.seedBarcode});
+  const AiPhotoIdentificationScreen({
+    super.key,
+    this.seedBarcode,
+    this.initialCategory,
+  });
 
   final String? seedBarcode;
+  final String? initialCategory;
 
   @override
   State<AiPhotoIdentificationScreen> createState() =>
@@ -138,6 +143,7 @@ class _AiPhotoIdentificationScreenState
           initialImage: (_result?.imageUrl ?? '').isNotEmpty
               ? null
               : _selectedImage,
+          initialCategory: widget.initialCategory,
         ),
       ),
     );
@@ -159,7 +165,10 @@ class _AiPhotoIdentificationScreenState
     }
 
     try {
-      return await _autofillResolver.resolve(identificationResult);
+      return await _autofillResolver.resolve(
+        identificationResult,
+        preferredCategory: widget.initialCategory,
+      );
     } catch (_) {
       return null;
     }

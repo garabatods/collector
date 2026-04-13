@@ -124,6 +124,7 @@ class _CollectorTextFieldState extends State<CollectorTextField> {
           textInputAction: widget.textInputAction,
           autofillHints: widget.autofillHints,
           onChanged: widget.onChanged,
+          onTapOutside: (_) => _focusNode.unfocus(),
           decoration: InputDecoration(
             hintText: widget.hintText,
             errorText: widget.errorText,
@@ -274,6 +275,7 @@ class _CollectorSearchFieldState extends State<CollectorSearchField> {
       autofocus: widget.autofocus,
       onTap: widget.onTap,
       onChanged: widget.onChanged,
+      onTapOutside: (_) => _focusNode?.unfocus(),
       decoration: InputDecoration(
         filled: true,
         fillColor: widget.fillColor ?? AppColors.surfaceContainerHighest,

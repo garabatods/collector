@@ -5,6 +5,7 @@ import '../core/data/archive_types.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
+import '../widgets/category_icon.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collectible_grid_card.dart';
@@ -346,10 +347,7 @@ class _CollectionLibraryLoadedStateState
                   AppSpacing.md,
                   AppSpacing.sm,
                 ),
-                child: Text(
-                  'Your Library',
-                  style: Theme.of(context).textTheme.headlineLarge,
-                ),
+                child: const _LibraryPageTitle(),
               ),
             ),
             SliverAppBar(
@@ -538,6 +536,45 @@ class _CollectionLibraryLoadedStateState
   }
 }
 
+class _LibraryPageTitle extends StatelessWidget {
+  const _LibraryPageTitle();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 64,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.centerLeft,
+        children: [
+          Positioned(
+            right: AppSpacing.md,
+            top: -8,
+            child: Image.asset(
+              'assets/icons/categories_v2/library_big.png',
+              width: 86,
+              height: 86,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.high,
+            ),
+          ),
+          Positioned.fill(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Your Library',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.headlineLarge,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 extension on _LibrarySortOption {
   String get label => switch (this) {
     _LibrarySortOption.newest => 'Newest',
@@ -678,10 +715,10 @@ class _LibraryScopeButton extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Icon(
-                Icons.collections_bookmark_outlined,
-                size: 18,
-                color: AppColors.primary,
+              const CategoryIcon(
+                category: 'Library',
+                size: 22,
+                fallbackColor: AppColors.primary,
               ),
               const SizedBox(width: AppSpacing.sm),
               Flexible(
@@ -1095,15 +1132,21 @@ class _LibraryScopeOptionRow extends StatelessWidget {
                         ),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Icon(
-                  scope.category == null
-                      ? Icons.inventory_2_outlined
-                      : Icons.category_outlined,
-                  color: selected
-                      ? AppColors.primary
-                      : AppColors.onSurfaceVariant,
-                  size: 19,
-                ),
+                child: scope.category == null
+                    ? CategoryIcon(
+                        category: 'Library',
+                        size: 30,
+                        fallbackColor: selected
+                            ? AppColors.primary
+                            : AppColors.onSurfaceVariant,
+                      )
+                    : CategoryIcon(
+                        category: scope.category,
+                        size: 30,
+                        fallbackColor: selected
+                            ? AppColors.primary
+                            : AppColors.onSurfaceVariant,
+                      ),
               ),
               const SizedBox(width: AppSpacing.md),
               Expanded(
@@ -1560,10 +1603,10 @@ class _CollectionLibraryEmptyState extends StatelessWidget {
                   shape: BoxShape.circle,
                   color: AppColors.primaryContainer.withValues(alpha: 0.18),
                 ),
-                child: const Icon(
-                  Icons.collections_bookmark_outlined,
-                  color: AppColors.primary,
-                  size: 32,
+                child: const CategoryIcon(
+                  category: 'Library',
+                  size: 40,
+                  fallbackColor: AppColors.primary,
                 ),
               ),
               const SizedBox(height: AppSpacing.lg),

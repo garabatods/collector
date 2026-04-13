@@ -1334,6 +1334,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
             minLines: 3,
             maxLines: 5,
             textInputAction: TextInputAction.done,
+            onTapOutside: (_) => _bioFocusNode.unfocus(),
             decoration: InputDecoration(
               hintText:
                   'Action figures, games, comics, or whatever makes your shelf feel alive.',

@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 
 import '../core/data/archive_repository.dart';
+import '../features/collection/data/repositories/collection_vocabulary_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_radii.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/add_item_method_sheet.dart';
+import '../widgets/category_icon.dart';
+import '../widgets/collector_button.dart';
 import '../widgets/archive_sync_status_banner.dart';
 import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collector_bottom_bar.dart';
+import '../widgets/collector_text_field.dart';
 import 'ai_photo_identification_screen.dart';
 import 'collection_home_screen.dart';
 import 'collection_library_screen.dart';
@@ -32,7 +37,21 @@ class HomeDashboardScreen extends StatefulWidget {
 enum _DashboardTab { home, library, wishlist, profile }
 
 class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
+  static const _fixedCategoryOptions = [
+    'Action Figures',
+    'Board Games',
+    'Statues',
+    'Vinyl Figures',
+    'Trading Cards',
+    'Comics',
+    'Memorabilia',
+    'Die-cast',
+    'Other',
+  ];
+  static String? _lastAddCategory;
+
   final _archiveRepository = ArchiveRepository.instance;
+  final _vocabularyRepository = CollectionVocabularyRepository();
   var _selectedTab = _DashboardTab.home;
   var _refreshSeed = 0;
   var _librarySearchFocusRequest = 0;
@@ -75,6 +94,11 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   }
 
   Future<void> _openAddEntrySheet() async {
+    final categoryOptions = await _loadAddCategoryOptions();
+    if (!mounted) {
+      return;
+    }
+
     await showModalBottomSheet<void>(
       context: context,
       useSafeArea: true,
@@ -82,38 +106,69 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       backgroundColor: Colors.transparent,
       builder: (context) {
         return _AddToCollectionSheet(
-          onScanBarcode: () {
+          categoryOptions: categoryOptions,
+          initialCategory: _lastAddCategory,
+          onScanBarcode: (category) {
             Navigator.of(context).pop();
-            _openScannerFlow();
+            _openScannerFlow(initialCategory: category);
           },
-          onIdentifyWithAi: () {
+          onIdentifyWithAi: (category) {
             Navigator.of(context).pop();
-            _openAiPhotoIdFlow();
+            _openAiPhotoIdFlow(initialCategory: category);
           },
-          onAddManually: () {
+          onAddManually: (category) {
             Navigator.of(context).pop();
-            _openManualAddFlow();
+            _openManualAddFlow(initialCategory: category);
           },
         );
       },
     );
   }
 
-  Future<void> _openScannerFlow() async {
-    final created = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const ScannerFlowScreen()),
-    );
-
-    if (created == true) {
-      _refreshCollectionViews();
-      _selectTab(_DashboardTab.library);
+  Future<List<String>> _loadAddCategoryOptions() async {
+    try {
+      final vocabulary = await _vocabularyRepository.fetch();
+      return _mergeCategoryOptions(vocabulary.categories);
+    } catch (_) {
+      return _mergeCategoryOptions(const []);
     }
   }
 
-  Future<void> _openAiPhotoIdFlow() async {
+  List<String> _mergeCategoryOptions(Iterable<String> savedCategories) {
+    final categories = <String>[];
+    final seen = <String>{};
+    void add(String? value) {
+      final category = value?.trim();
+      if (category == null || category.isEmpty) {
+        return;
+      }
+      if (seen.add(category.toLowerCase())) {
+        categories.add(category);
+      }
+    }
+
+    add(_lastAddCategory);
+    for (final category in _fixedCategoryOptions) {
+      add(category);
+    }
+    for (final category in savedCategories) {
+      add(category);
+    }
+    return categories;
+  }
+
+  void _rememberAddCategory(String? category) {
+    final trimmed = category?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) {
+      _lastAddCategory = trimmed;
+    }
+  }
+
+  Future<void> _openScannerFlow({String? initialCategory}) async {
+    _rememberAddCategory(initialCategory);
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => const AiPhotoIdentificationScreen(),
+        builder: (_) => ScannerFlowScreen(initialCategory: initialCategory),
       ),
     );
 
@@ -123,10 +178,27 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     }
   }
 
-  Future<void> _openManualAddFlow() async {
+  Future<void> _openAiPhotoIdFlow({String? initialCategory}) async {
+    _rememberAddCategory(initialCategory);
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => const ManualAddCollectibleScreen(),
+        builder: (_) =>
+            AiPhotoIdentificationScreen(initialCategory: initialCategory),
+      ),
+    );
+
+    if (created == true) {
+      _refreshCollectionViews();
+      _selectTab(_DashboardTab.library);
+    }
+  }
+
+  Future<void> _openManualAddFlow({String? initialCategory}) async {
+    _rememberAddCategory(initialCategory);
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) =>
+            ManualAddCollectibleScreen(initialCategory: initialCategory),
       ),
     );
 
@@ -252,50 +324,217 @@ class _DashboardLifecycleObserver with WidgetsBindingObserver {
   }
 }
 
-class _AddToCollectionSheet extends StatelessWidget {
+class _AddToCollectionSheet extends StatefulWidget {
   const _AddToCollectionSheet({
+    required this.categoryOptions,
+    required this.initialCategory,
     required this.onScanBarcode,
     required this.onIdentifyWithAi,
     required this.onAddManually,
   });
 
-  final VoidCallback onScanBarcode;
-  final VoidCallback onIdentifyWithAi;
-  final VoidCallback onAddManually;
+  final List<String> categoryOptions;
+  final String? initialCategory;
+  final ValueChanged<String> onScanBarcode;
+  final ValueChanged<String> onIdentifyWithAi;
+  final ValueChanged<String> onAddManually;
+
+  @override
+  State<_AddToCollectionSheet> createState() => _AddToCollectionSheetState();
+}
+
+class _AddToCollectionSheetState extends State<_AddToCollectionSheet> {
+  String? _selectedCategory;
+
+  @override
+  void initState() {
+    super.initState();
+    final initialCategory = widget.initialCategory?.trim();
+    _selectedCategory = initialCategory == null || initialCategory.isEmpty
+        ? null
+        : initialCategory;
+  }
+
+  Future<String?> _chooseCategory() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _AddCategoryChoiceSheet(
+        options: widget.categoryOptions,
+        selectedCategory: _selectedCategory,
+      ),
+    );
+
+    if (!mounted || selected == null) {
+      return null;
+    }
+
+    final category = selected.trim();
+    if (category.isEmpty) {
+      return null;
+    }
+
+    setState(() {
+      _selectedCategory = category;
+    });
+    return category;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final selectedCategory = _selectedCategory?.trim();
+    final hasCategory = selectedCategory != null && selectedCategory.isNotEmpty;
+
+    return AddItemMethodSheet(
+      title: hasCategory ? 'Add to $selectedCategory' : 'Add to Collection',
+      description: hasCategory
+          ? 'Items from this flow will start in this category.'
+          : 'Pick how to add the item. Category comes first.',
+      category: _selectedCategory,
+      onChooseCategory: _chooseCategory,
+      requireCategory: true,
+      onScanBarcode: () => widget.onScanBarcode(selectedCategory!),
+      onIdentifyWithAi: () => widget.onIdentifyWithAi(selectedCategory!),
+      onAddManually: () => widget.onAddManually(selectedCategory!),
+    );
+  }
+}
+
+class _AddCategoryChoiceSheet extends StatefulWidget {
+  const _AddCategoryChoiceSheet({
+    required this.options,
+    required this.selectedCategory,
+  });
+
+  final List<String> options;
+  final String? selectedCategory;
+
+  @override
+  State<_AddCategoryChoiceSheet> createState() =>
+      _AddCategoryChoiceSheetState();
+}
+
+class _AddCategoryChoiceSheetState extends State<_AddCategoryChoiceSheet> {
+  final _searchController = TextEditingController();
+  final _createController = TextEditingController();
+  var _query = '';
+  var _showCreate = false;
+  String? _createErrorText;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _createController.dispose();
+    super.dispose();
+  }
+
+  void _submitCreatedCategory() {
+    final category = _createController.text.trim();
+    if (category.isEmpty) {
+      setState(() {
+        _createErrorText = 'Category name is required.';
+      });
+      return;
+    }
+
+    final existingCategory = widget.options.cast<String?>().firstWhere(
+      (option) => (option ?? '').trim().toLowerCase() == category.toLowerCase(),
+      orElse: () => null,
+    );
+    Navigator.of(context).pop(existingCategory ?? category);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final options = widget.options
+        .where(
+          (option) =>
+              _query.trim().isEmpty ||
+              option.toLowerCase().contains(_query.trim().toLowerCase()),
+        )
+        .toList(growable: false);
+
     return CollectorBottomSheet(
-      title: 'Add to Collection',
-      description: 'Choose the add flow that fits the item in front of you.',
+      title: 'Choose category',
+      description: 'This keeps the add flow anchored before scanning.',
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _AddEntryOptionTile(
-            icon: Icons.qr_code_scanner_rounded,
-            title: 'Scan barcode',
-            helperText: 'best for boxed items with a visible barcode',
-            tone: AppColors.primary,
-            onTap: onScanBarcode,
+          CollectorSearchField(
+            hintText: 'Search categories',
+            controller: _searchController,
+            readOnly: false,
+            onChanged: (value) {
+              setState(() {
+                _query = value;
+              });
+            },
           ),
           const SizedBox(height: AppSpacing.md),
-          _AddEntryOptionTile(
-            icon: Icons.auto_awesome_rounded,
-            title: 'Identify with AI',
-            helperText:
-                'best for comics, loose items, rare pieces, and barcode-less collectibles',
-            tone: AppColors.tertiary,
-            premium: true,
-            onTap: onIdentifyWithAi,
+          _SheetActionRow(
+            label: 'Create category',
+            icon: Icons.add_rounded,
+            onTap: () {
+              setState(() {
+                _showCreate = true;
+                _createErrorText = null;
+                if (_createController.text.trim().isEmpty &&
+                    _query.trim().isNotEmpty) {
+                  _createController.text = _query.trim();
+                }
+              });
+            },
           ),
-          const SizedBox(height: AppSpacing.md),
-          _AddEntryOptionTile(
-            icon: Icons.add_photo_alternate_outlined,
-            title: 'Add manually',
-            helperText:
-                'best for loose, vintage, custom, rare, or barcode-less collectibles',
-            tone: AppColors.secondary,
-            onTap: onAddManually,
+          if (_showCreate) ...[
+            const SizedBox(height: AppSpacing.sm),
+            CollectorTextField(
+              label: 'Category name',
+              hintText: 'Car toy',
+              controller: _createController,
+              errorText: _createErrorText,
+              textInputAction: TextInputAction.done,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            SizedBox(
+              width: double.infinity,
+              child: CollectorButton(
+                label: 'Use category',
+                onPressed: _submitCreatedCategory,
+              ),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.sm),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: options.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.all(AppSpacing.lg),
+                    child: Text(
+                      'No saved categories match yet.',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    separatorBuilder: (_, _) =>
+                        const SizedBox(height: AppSpacing.xs),
+                    itemBuilder: (context, index) {
+                      final option = options[index];
+                      final isSelected =
+                          widget.selectedCategory?.trim().toLowerCase() ==
+                          option.trim().toLowerCase();
+                      return _SheetCategoryRow(
+                        label: option,
+                        selected: isSelected,
+                        onTap: () => Navigator.of(context).pop(option),
+                      );
+                    },
+                  ),
           ),
         ],
       ),
@@ -303,22 +542,40 @@ class _AddToCollectionSheet extends StatelessWidget {
   }
 }
 
-class _AddEntryOptionTile extends StatelessWidget {
-  const _AddEntryOptionTile({
+class _SheetActionRow extends StatelessWidget {
+  const _SheetActionRow({
+    required this.label,
     required this.icon,
-    required this.title,
-    required this.helperText,
-    required this.tone,
     required this.onTap,
-    this.premium = false,
   });
 
+  final String label;
   final IconData icon;
-  final String title;
-  final String helperText;
-  final Color tone;
   final VoidCallback onTap;
-  final bool premium;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SheetCategoryRow(
+      label: label,
+      selected: false,
+      leadingIcon: icon,
+      onTap: onTap,
+    );
+  }
+}
+
+class _SheetCategoryRow extends StatelessWidget {
+  const _SheetCategoryRow({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.leadingIcon,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final IconData? leadingIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -326,75 +583,51 @@ class _AddEntryOptionTile extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: AppRadii.large,
+        borderRadius: AppRadii.medium,
         child: Ink(
+          padding: const EdgeInsets.all(AppSpacing.md),
           decoration: BoxDecoration(
-            gradient: premium
-                ? LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      AppColors.primary.withValues(alpha: 0.18),
-                      AppColors.surfaceContainer,
-                      AppColors.tertiary.withValues(alpha: 0.16),
-                    ],
-                  )
-                : null,
-            color: premium ? null : AppColors.surfaceContainer,
-            borderRadius: AppRadii.large,
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.12)
+                : AppColors.surfaceContainer,
+            borderRadius: AppRadii.medium,
             border: Border.all(
-              color: tone.withValues(alpha: premium ? 0.34 : 0.22),
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.4)
+                  : AppColors.outlineVariant.withValues(alpha: 0.18),
             ),
-            boxShadow: premium
-                ? [
-                    BoxShadow(
-                      color: AppColors.primaryShadow.withValues(alpha: 0.42),
-                      blurRadius: 26,
-                      offset: const Offset(0, 12),
-                    ),
-                  ]
-                : null,
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: tone.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: Icon(icon, color: tone, size: 24),
-                ),
-                const SizedBox(width: AppSpacing.md),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(color: premium ? AppColors.white : null),
-                      ),
-                      const SizedBox(height: AppSpacing.xs),
-                      Text(
-                        helperText,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: premium
-                              ? AppColors.white.withValues(alpha: 0.82)
-                              : AppColors.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
+          child: Row(
+            children: [
+              if (leadingIcon != null) ...[
+                Icon(leadingIcon, color: AppColors.primary, size: 18),
+                const SizedBox(width: AppSpacing.sm),
+              ] else ...[
+                CategoryIcon(
+                  category: label,
+                  size: 28,
+                  fallbackColor: selected
+                      ? AppColors.primary
+                      : AppColors.onSurfaceVariant,
                 ),
                 const SizedBox(width: AppSpacing.sm),
-                Icon(Icons.arrow_forward_rounded, color: tone),
               ],
-            ),
+              Expanded(
+                child: Text(
+                  label,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Icon(
+                selected
+                    ? Icons.check_circle_rounded
+                    : Icons.chevron_right_rounded,
+                color: selected
+                    ? AppColors.primary
+                    : AppColors.onSurfaceVariant,
+              ),
+            ],
           ),
         ),
       ),

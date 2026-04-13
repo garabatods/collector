@@ -9,6 +9,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_fonts.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
+import '../widgets/category_icon.dart';
 import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_loading_overlay.dart';
@@ -16,6 +17,7 @@ import '../widgets/collector_panel.dart';
 import '../widgets/collector_section_header.dart';
 import '../widgets/collector_text_field.dart';
 import '../widgets/resolved_avatar_image.dart';
+import 'all_categories_screen.dart';
 import 'category_collection_screen.dart';
 
 const _homeTopChromeColor = AppColors.dashboardGlow;
@@ -182,7 +184,10 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
     final screenWidth = MediaQuery.sizeOf(context).width;
     final textScale = MediaQuery.textScalerOf(context).scale(1);
     final compactLayout = screenWidth < 380 || textScale > 1.1;
-    final categoryHighlights = _buildCategoryHighlights(widget.collectibles);
+    final allCategoryHighlights = _buildCategoryHighlights(widget.collectibles);
+    final categoryHighlights = allCategoryHighlights
+        .take(6)
+        .toList(growable: false);
     final recentItems = widget.data.recentItems;
     final favoriteItems = widget.data.favoriteItems;
 
@@ -213,7 +218,9 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                 CollectorSectionHeader(
                   title: 'Categories',
                   trailing: TextButton(
-                    onPressed: widget.onOpenLibrary,
+                    onPressed: allCategoryHighlights.isEmpty
+                        ? widget.onOpenLibrary
+                        : _openAllCategoriesScreen,
                     style: TextButton.styleFrom(
                       foregroundColor: AppColors.primary,
                       padding: const EdgeInsets.symmetric(
@@ -396,8 +403,6 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
       });
 
     return entries
-        .take(6)
-        .toList()
         .asMap()
         .entries
         .map((entry) {
@@ -408,6 +413,16 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
           );
         })
         .toList(growable: false);
+  }
+
+  Future<void> _openAllCategoriesScreen() async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const AllCategoriesScreen()),
+    );
+
+    if (changed == true) {
+      await widget.onCollectionChanged();
+    }
   }
 
   _CategoryCardStyle _resolveCategoryCardStyle(int index) {
@@ -834,6 +849,11 @@ class _CategoryShowcaseCard extends StatelessWidget {
             height: 1.1,
             color: category.style.itemCountColor.withValues(alpha: 0.8),
           );
+          final iconSize = denseCard
+              ? 28.0
+              : compactLayout
+              ? 30.0
+              : 34.0;
 
           return Material(
             color: Colors.transparent,
@@ -854,19 +874,30 @@ class _CategoryShowcaseCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SizedBox(
-                      height: denseCard ? 24 : 28,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            category.title,
-                            maxLines: 1,
-                            softWrap: false,
-                            style: titleStyle,
+                      height: denseCard ? 32 : 36,
+                      child: Row(
+                        children: [
+                          CategoryIcon(
+                            category: category.title,
+                            size: iconSize,
                           ),
-                        ),
+                          const SizedBox(width: AppSpacing.xs),
+                          Expanded(
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  category.title,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  style: titleStyle,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 8),

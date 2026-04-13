@@ -4,13 +4,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_radii.dart';
 import '../theme/app_spacing.dart';
 
-enum CollectorButtonVariant {
-  primary,
-  secondary,
-  tertiary,
-  icon,
-  floating,
-}
+enum CollectorButtonVariant { primary, secondary, tertiary, icon, floating }
 
 class CollectorButton extends StatelessWidget {
   const CollectorButton({
@@ -30,25 +24,36 @@ class CollectorButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isEnabled = onPressed != null && !isLoading;
+
     switch (variant) {
       case CollectorButtonVariant.primary:
         return DecoratedBox(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             borderRadius: AppRadii.medium,
-            gradient: AppColors.primaryGradient,
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primaryShadow,
-                blurRadius: 32,
-                offset: Offset(0, 16),
-              ),
-            ],
+            color: isEnabled
+                ? null
+                : AppColors.surfaceContainerHighest.withValues(alpha: 0.36),
+            gradient: isEnabled ? AppColors.primaryGradient : null,
+            boxShadow: isEnabled
+                ? const [
+                    BoxShadow(
+                      color: AppColors.primaryShadow,
+                      blurRadius: 32,
+                      offset: Offset(0, 16),
+                    ),
+                  ]
+                : null,
           ),
           child: FilledButton(
             onPressed: isLoading ? null : onPressed,
             style: FilledButton.styleFrom(
               backgroundColor: Colors.transparent,
+              disabledBackgroundColor: Colors.transparent,
               foregroundColor: AppColors.onPrimary,
+              disabledForegroundColor: AppColors.onSurfaceVariant.withValues(
+                alpha: 0.44,
+              ),
               shadowColor: Colors.transparent,
               shape: const RoundedRectangleBorder(
                 borderRadius: AppRadii.medium,
@@ -72,12 +77,15 @@ class CollectorButton extends StatelessWidget {
           onPressed: isLoading ? null : onPressed,
           style: OutlinedButton.styleFrom(
             foregroundColor: AppColors.onSurface,
+            disabledForegroundColor: AppColors.onSurfaceVariant.withValues(
+              alpha: 0.44,
+            ),
             side: BorderSide(
-              color: AppColors.outlineVariant.withValues(alpha: 0.3),
+              color: AppColors.outlineVariant.withValues(
+                alpha: isEnabled ? 0.3 : 0.16,
+              ),
             ),
-            shape: const RoundedRectangleBorder(
-              borderRadius: AppRadii.medium,
-            ),
+            shape: const RoundedRectangleBorder(borderRadius: AppRadii.medium),
             padding: const EdgeInsets.symmetric(
               horizontal: AppSpacing.lg,
               vertical: AppSpacing.md,

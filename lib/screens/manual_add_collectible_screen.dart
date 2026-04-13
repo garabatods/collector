@@ -35,6 +35,7 @@ class ManualAddCollectibleScreen extends StatefulWidget {
     this.identificationResult,
     this.autofillResult,
     this.initialImage,
+    this.initialCategory,
     this.selectedTagIds,
     this.newTagNames,
   });
@@ -45,6 +46,7 @@ class ManualAddCollectibleScreen extends StatefulWidget {
   final CollectibleIdentificationResult? identificationResult;
   final AddItemAutofillResult? autofillResult;
   final XFile? initialImage;
+  final String? initialCategory;
   final List<String>? selectedTagIds;
   final List<String>? newTagNames;
 
@@ -55,6 +57,8 @@ class ManualAddCollectibleScreen extends StatefulWidget {
 
 class _ManualAddCollectibleScreenState
     extends State<ManualAddCollectibleScreen> {
+  static String? _lastUsedCategory;
+
   static const List<String> _topCategories = [
     'Action Figures',
     'Board Games',
@@ -176,6 +180,7 @@ class _ManualAddCollectibleScreenState
 
     final collectible = widget.collectible;
     if (collectible == null) {
+      _applyInitialCategory();
       _hydrateFromIdentification();
       _applyAutofillResult();
       _loadSuggestions();
@@ -225,6 +230,22 @@ class _ManualAddCollectibleScreenState
     _loadSuggestions();
   }
 
+  void _applyInitialCategory() {
+    final category = widget.initialCategory?.trim();
+    if (category == null || category.isEmpty) {
+      return;
+    }
+
+    _selectedCategory = category;
+    _useCustomCategory = false;
+    _customCategoryController.clear();
+    _categoryError = null;
+    _lastUsedCategory = category;
+    _formMode = _isComicCategory(category)
+        ? AddItemFormMode.comic
+        : AddItemFormMode.general;
+  }
+
   void _hydrateFromIdentification() {
     final identificationResult = widget.identificationResult;
     if (identificationResult == null) {
@@ -250,8 +271,8 @@ class _ManualAddCollectibleScreenState
     }
     if (_seriesController.text.trim().isEmpty) {
       _seriesController.text =
-          identificationResult.volumeCandidate ??
-          identificationResult.series ??
+          _usefulSeriesCandidate(identificationResult.volumeCandidate) ??
+          _usefulSeriesCandidate(identificationResult.series) ??
           '';
     }
     if (_characterController.text.trim().isEmpty) {
@@ -273,7 +294,9 @@ class _ManualAddCollectibleScreenState
       return;
     }
 
-    _formMode = autofillResult.formMode;
+    if (!_hasExplicitInitialCategory) {
+      _formMode = autofillResult.formMode;
+    }
     _setIfEmpty(_titleController, autofillResult.title);
     _setIfEmpty(_descriptionController, autofillResult.description);
     _setIfEmpty(_franchiseController, autofillResult.franchise);
@@ -414,15 +437,17 @@ class _ManualAddCollectibleScreenState
   }
 
   void _selectCategory(String category) {
+    final trimmedCategory = category.trim();
     setState(() {
       _useCustomCategory = false;
-      _selectedCategory = category;
+      _selectedCategory = trimmedCategory;
       _customCategoryController.clear();
       _categoryError = null;
-      _formMode = _isComicCategory(category)
+      _formMode = _isComicCategory(trimmedCategory)
           ? AddItemFormMode.comic
           : AddItemFormMode.general;
     });
+    _lastUsedCategory = trimmedCategory.isEmpty ? null : trimmedCategory;
   }
 
   void _selectBrand(String brand) {
@@ -456,6 +481,7 @@ class _ManualAddCollectibleScreenState
   }
 
   Future<void> _openCategorySelectorSheet() async {
+    final latestCategory = (_lastUsedCategory ?? '').trim();
     final selected = await showModalBottomSheet<String>(
       context: context,
       useSafeArea: true,
@@ -467,6 +493,7 @@ class _ManualAddCollectibleScreenState
             'Search categories instead of browsing a long wall of pills.',
         searchHint: 'Search categories',
         options: _categoryOptions,
+        pinnedOption: latestCategory.isEmpty ? null : latestCategory,
         selectedValue: _useCustomCategory ? null : _selectedCategory,
         createActionLabel: 'Create category',
         createFieldLabel: 'Category name',
@@ -566,6 +593,11 @@ class _ManualAddCollectibleScreenState
     return category.trim().toLowerCase() == 'comics';
   }
 
+  bool get _hasExplicitInitialCategory {
+    final category = widget.initialCategory?.trim();
+    return category != null && category.isNotEmpty;
+  }
+
   String? _resolvedBrand() {
     final selectedBrand = (_selectedBrand ?? '').trim();
     return selectedBrand.isEmpty ? null : selectedBrand;
@@ -643,6 +675,26 @@ class _ManualAddCollectibleScreenState
   String? _nullableText(TextEditingController controller) {
     final value = controller.text.trim();
     return value.isEmpty ? null : value;
+  }
+
+  String? _usefulSeriesCandidate(String? value) {
+    final cleaned = value?.trim();
+    if (cleaned == null ||
+        cleaned.isEmpty ||
+        !RegExp(r'[A-Za-z]').hasMatch(cleaned)) {
+      return null;
+    }
+
+    final compact = cleaned.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+    final hasSeparator = RegExp(r'[^A-Za-z0-9]').hasMatch(cleaned);
+    final hasLowercase = RegExp(r'[a-z]').hasMatch(cleaned);
+    final isAllCapsCode =
+        !hasLowercase &&
+        !hasSeparator &&
+        RegExp(r'^[A-Z0-9]+$').hasMatch(compact) &&
+        compact.length > 5;
+
+    return isAllCapsCode ? null : cleaned;
   }
 
   int? _nullableInt(TextEditingController controller) {
@@ -764,6 +816,7 @@ class _ManualAddCollectibleScreenState
 
     try {
       final messenger = ScaffoldMessenger.of(context);
+      _lastUsedCategory = category;
       final writeModel = CollectibleModel(
         id: widget.collectible?.id,
         userId: widget.collectible?.userId,
@@ -1813,6 +1866,7 @@ class _TextAreaFieldState extends State<_TextAreaField> {
           minLines: 3,
           maxLines: 5,
           textInputAction: TextInputAction.newline,
+          onTapOutside: (_) => _focusNode.unfocus(),
           decoration: InputDecoration(
             hintText: widget.hintText,
             alignLabelWithHint: true,
@@ -1903,6 +1957,7 @@ class _OptionSearchBottomSheet extends StatefulWidget {
     required this.createFieldLabel,
     required this.createFieldHint,
     required this.createSubmitLabel,
+    this.pinnedOption,
     this.initialCreateValue = '',
     this.emptyStateLabel,
   });
@@ -1916,6 +1971,7 @@ class _OptionSearchBottomSheet extends StatefulWidget {
   final String createFieldLabel;
   final String createFieldHint;
   final String createSubmitLabel;
+  final String? pinnedOption;
   final String initialCreateValue;
   final String? emptyStateLabel;
 
@@ -1973,14 +2029,30 @@ class _OptionSearchBottomSheetState extends State<_OptionSearchBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final normalizedOptions = widget.options.toSet().toList(growable: false)
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final normalizedOptions = <String>[];
+    final seenOptions = <String>{};
+    for (final option in widget.options) {
+      final trimmed = option.trim();
+      final normalized = trimmed.toLowerCase();
+      if (trimmed.isNotEmpty && seenOptions.add(normalized)) {
+        normalizedOptions.add(trimmed);
+      }
+    }
+    final pinnedOption = widget.pinnedOption?.trim();
+    final showPinnedOption =
+        (pinnedOption ?? '').isNotEmpty &&
+        (_query.trim().isEmpty ||
+            pinnedOption!.toLowerCase().contains(_query.trim().toLowerCase()));
     final filteredOptions = normalizedOptions
-        .where(
-          (option) =>
+        .where((option) {
+          final matchesQuery =
               _query.trim().isEmpty ||
-              option.toLowerCase().contains(_query.trim().toLowerCase()),
-        )
+              option.toLowerCase().contains(_query.trim().toLowerCase());
+          final duplicatesPinned =
+              showPinnedOption &&
+              option.toLowerCase() == pinnedOption!.toLowerCase();
+          return matchesQuery && !duplicatesPinned;
+        })
         .toList(growable: false);
 
     return _SelectionBottomSheetShell(
@@ -2025,9 +2097,18 @@ class _OptionSearchBottomSheetState extends State<_OptionSearchBottomSheet> {
                 : const SizedBox.shrink(),
           ),
           const SizedBox(height: AppSpacing.sm),
+          if (showPinnedOption) ...[
+            _SheetSelectableRow(
+              label: pinnedOption!,
+              selected: widget.selectedValue == pinnedOption,
+              leadingIcon: Icons.history_rounded,
+              onTap: () => Navigator.of(context).pop(pinnedOption),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+          ],
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 320),
-            child: filteredOptions.isEmpty
+            child: filteredOptions.isEmpty && !showPinnedOption
                 ? Center(
                     child: Padding(
                       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -2039,6 +2120,8 @@ class _OptionSearchBottomSheetState extends State<_OptionSearchBottomSheet> {
                       ),
                     ),
                   )
+                : filteredOptions.isEmpty
+                ? const SizedBox.shrink()
                 : ListView.separated(
                     shrinkWrap: true,
                     itemCount: filteredOptions.length,

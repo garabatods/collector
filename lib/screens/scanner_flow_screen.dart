@@ -7,6 +7,7 @@ import '../features/collection/data/repositories/collectible_identification_repo
 import '../features/collection/data/services/add_item_autofill_resolver.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/category_icon.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/collector_sticky_back_button.dart';
@@ -15,14 +16,59 @@ import 'manual_add_collectible_screen.dart';
 
 enum _LookupPhase { idle, loading, found, notFound, failed }
 
+enum _MultiScanItemStatus { queued, loading, found, notFound, failed }
+
+class _MultiScanTrayItem {
+  const _MultiScanTrayItem({
+    required this.id,
+    required this.barcode,
+    required this.status,
+    this.lookupResult,
+    this.message,
+  });
+
+  final int id;
+  final String barcode;
+  final _MultiScanItemStatus status;
+  final CollectibleIdentificationResult? lookupResult;
+  final String? message;
+
+  bool get canReview =>
+      status == _MultiScanItemStatus.found ||
+      status == _MultiScanItemStatus.notFound ||
+      status == _MultiScanItemStatus.failed;
+
+  _MultiScanTrayItem copyWith({
+    _MultiScanItemStatus? status,
+    CollectibleIdentificationResult? lookupResult,
+    String? message,
+    bool clearLookupResult = false,
+    bool clearMessage = false,
+  }) {
+    return _MultiScanTrayItem(
+      id: id,
+      barcode: barcode,
+      status: status ?? this.status,
+      lookupResult: clearLookupResult
+          ? null
+          : lookupResult ?? this.lookupResult,
+      message: clearMessage ? null : message ?? this.message,
+    );
+  }
+}
+
 class ScannerFlowScreen extends StatefulWidget {
-  const ScannerFlowScreen({super.key});
+  const ScannerFlowScreen({super.key, this.initialCategory});
+
+  final String? initialCategory;
 
   @override
   State<ScannerFlowScreen> createState() => _ScannerFlowScreenState();
 }
 
 class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
+  static const _multiScanLimit = 5;
+
   final MobileScannerController _controller = MobileScannerController(
     detectionSpeed: DetectionSpeed.noDuplicates,
     formats: const [
@@ -46,6 +92,12 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
   _LookupPhase _lookupPhase = _LookupPhase.idle;
   bool _isHandlingDetection = false;
   bool _isScannerPaused = false;
+  bool _isMultiScanMode = false;
+  bool _isProcessingMultiScanQueue = false;
+  bool _createdDuringMultiScan = false;
+  int _nextMultiScanItemId = 0;
+  String? _multiScanNotice;
+  List<_MultiScanTrayItem> _multiScanItems = const [];
 
   @override
   void dispose() {
@@ -70,6 +122,11 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
     _isHandlingDetection = true;
 
     try {
+      if (_isMultiScanMode) {
+        await _addMultiScanBarcode(barcode);
+        return;
+      }
+
       await _controller.stop();
       _isScannerPaused = true;
 
@@ -134,6 +191,348 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
     }
   }
 
+  Future<void> _addMultiScanBarcode(String barcode) async {
+    final normalizedBarcode = _normalizeBarcodeInput(barcode);
+    if (normalizedBarcode.isEmpty) {
+      return;
+    }
+
+    final alreadyScanned = _multiScanItems.any(
+      (item) => item.barcode == normalizedBarcode,
+    );
+    if (alreadyScanned) {
+      setState(() {
+        _multiScanNotice = 'Already in the tray: $normalizedBarcode';
+      });
+      return;
+    }
+
+    if (_multiScanItems.length >= _multiScanLimit) {
+      setState(() {
+        _multiScanNotice = 'Review these 5 items before scanning more.';
+      });
+      await _pauseMultiScanAtLimit();
+      return;
+    }
+
+    final item = _MultiScanTrayItem(
+      id: _nextMultiScanItemId++,
+      barcode: normalizedBarcode,
+      status: _MultiScanItemStatus.queued,
+    );
+
+    setState(() {
+      _multiScanItems = List.unmodifiable([..._multiScanItems, item]);
+      _multiScanNotice =
+          'Added ${_multiScanItems.length}/$_multiScanLimit: $normalizedBarcode';
+    });
+
+    if (_multiScanItems.length >= _multiScanLimit) {
+      await _pauseMultiScanAtLimit();
+    }
+
+    _processMultiScanQueue();
+  }
+
+  Future<void> _pauseMultiScanAtLimit() async {
+    if (_isScannerPaused) {
+      return;
+    }
+
+    await _controller.stop();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _isScannerPaused = true;
+    });
+  }
+
+  Future<void> _processMultiScanQueue() async {
+    if (_isProcessingMultiScanQueue) {
+      return;
+    }
+
+    _isProcessingMultiScanQueue = true;
+    try {
+      while (mounted) {
+        final queuedIndex = _multiScanItems.indexWhere(
+          (item) => item.status == _MultiScanItemStatus.queued,
+        );
+        if (queuedIndex == -1) {
+          break;
+        }
+
+        final item = _multiScanItems[queuedIndex];
+        if (!_replaceMultiScanItem(
+          item.id,
+          item.copyWith(
+            status: _MultiScanItemStatus.loading,
+            clearLookupResult: true,
+            clearMessage: true,
+          ),
+        )) {
+          continue;
+        }
+
+        try {
+          final lookupResult = await _identificationRepository.identifyBarcode(
+            item.barcode,
+          );
+          if (!mounted) {
+            return;
+          }
+
+          final status = lookupResult.hasCatalogMatch
+              ? _MultiScanItemStatus.found
+              : lookupResult.isNotFound
+              ? _MultiScanItemStatus.notFound
+              : _MultiScanItemStatus.failed;
+          final message = lookupResult.hasCatalogMatch
+              ? null
+              : lookupResult.isNotFound
+              ? 'No catalog match. Add it manually or try AI Photo ID.'
+              : 'Lookup was unavailable. Retry, add manually, or use AI Photo ID.';
+
+          _replaceMultiScanItem(
+            item.id,
+            item.copyWith(
+              status: status,
+              lookupResult: lookupResult,
+              message: message,
+              clearMessage: message == null,
+            ),
+          );
+        } on CollectibleIdentificationException catch (error) {
+          if (!mounted) {
+            return;
+          }
+          _replaceMultiScanItem(
+            item.id,
+            item.copyWith(
+              status: _MultiScanItemStatus.failed,
+              message: error.message,
+              clearLookupResult: true,
+            ),
+          );
+        } catch (_) {
+          if (!mounted) {
+            return;
+          }
+          _replaceMultiScanItem(
+            item.id,
+            item.copyWith(
+              status: _MultiScanItemStatus.failed,
+              message:
+                  'Lookup is unavailable right now. You can still add it manually.',
+              clearLookupResult: true,
+            ),
+          );
+        }
+
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      }
+    } finally {
+      _isProcessingMultiScanQueue = false;
+    }
+  }
+
+  bool _replaceMultiScanItem(int id, _MultiScanTrayItem replacement) {
+    final index = _multiScanItems.indexWhere((item) => item.id == id);
+    if (index == -1 || !mounted) {
+      return false;
+    }
+
+    final updatedItems = [..._multiScanItems];
+    updatedItems[index] = replacement;
+    setState(() {
+      _multiScanItems = List.unmodifiable(updatedItems);
+    });
+    return true;
+  }
+
+  Future<void> _retryMultiScanItem(_MultiScanTrayItem item) async {
+    if (!_replaceMultiScanItem(
+      item.id,
+      item.copyWith(
+        status: _MultiScanItemStatus.queued,
+        clearLookupResult: true,
+        clearMessage: true,
+      ),
+    )) {
+      return;
+    }
+
+    setState(() {
+      _multiScanNotice = 'Retrying ${item.barcode}.';
+    });
+    await _processMultiScanQueue();
+  }
+
+  Future<void> _removeMultiScanItem(_MultiScanTrayItem item) async {
+    setState(() {
+      _multiScanItems = List.unmodifiable(
+        _multiScanItems.where((entry) => entry.id != item.id),
+      );
+      _multiScanNotice = 'Removed ${item.barcode}.';
+    });
+    await _resumeMultiScanIfPossible();
+  }
+
+  Future<void> _clearMultiScanTray() async {
+    setState(() {
+      _multiScanItems = const [];
+      _multiScanNotice = 'Tray cleared.';
+    });
+    await _resumeMultiScanIfPossible();
+  }
+
+  Future<void> _resumeMultiScanIfPossible() async {
+    if (!_isMultiScanMode ||
+        _multiScanItems.length >= _multiScanLimit ||
+        !_isScannerPaused) {
+      return;
+    }
+
+    await _controller.start();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _isScannerPaused = false;
+    });
+  }
+
+  Future<void> _toggleMultiScanMode() async {
+    if (_isMultiScanMode) {
+      if (_multiScanItems.isNotEmpty) {
+        setState(() {
+          _multiScanNotice = 'Clear the tray before returning to single scan.';
+        });
+        return;
+      }
+
+      setState(() {
+        _isMultiScanMode = false;
+        _multiScanNotice = null;
+      });
+      return;
+    }
+
+    if (_detectedBarcode != null) {
+      await _resumeScanning();
+      if (!mounted) {
+        return;
+      }
+    }
+
+    setState(() {
+      _isMultiScanMode = true;
+      _multiScanNotice = 'Multi-scan is ready. Scan up to 5 items.';
+    });
+  }
+
+  Future<void> _reviewNextMultiScanItem() async {
+    final nextItem = _nextReviewableMultiScanItem();
+    if (nextItem == null) {
+      setState(() {
+        _multiScanNotice = _multiScanItems.isEmpty
+            ? 'Scan an item to build the tray.'
+            : 'Still checking. Review will be ready in a moment.';
+      });
+      return;
+    }
+
+    await _continueToManualAddForMultiScanItem(nextItem);
+  }
+
+  _MultiScanTrayItem? _nextReviewableMultiScanItem() {
+    for (final item in _multiScanItems) {
+      if (item.canReview) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _continueToManualAddForMultiScanItem(
+    _MultiScanTrayItem item,
+  ) async {
+    final autofillResult = await _resolveAutofillResult(item.lookupResult);
+    if (!mounted) {
+      return;
+    }
+
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => ManualAddCollectibleScreen(
+          scannedBarcode: item.barcode,
+          identificationResult: item.lookupResult,
+          autofillResult: autofillResult,
+          initialCategory: widget.initialCategory,
+        ),
+      ),
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (created == true) {
+      await _finishMultiScanItem(item);
+    }
+  }
+
+  Future<void> _openAiPhotoIdForMultiScanItem(_MultiScanTrayItem item) async {
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => AiPhotoIdentificationScreen(
+          seedBarcode: item.barcode,
+          initialCategory: widget.initialCategory,
+        ),
+      ),
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (created == true) {
+      await _finishMultiScanItem(item);
+    }
+  }
+
+  Future<void> _finishMultiScanItem(_MultiScanTrayItem item) async {
+    setState(() {
+      _createdDuringMultiScan = true;
+      _multiScanItems = List.unmodifiable(
+        _multiScanItems.where((entry) => entry.id != item.id),
+      );
+      _multiScanNotice = 'Saved ${item.barcode}.';
+    });
+
+    final nextItem = _nextReviewableMultiScanItem();
+    if (nextItem != null) {
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      if (mounted) {
+        await _continueToManualAddForMultiScanItem(nextItem);
+      }
+      return;
+    }
+
+    await _resumeMultiScanIfPossible();
+  }
+
+  void _closeScanner() {
+    Navigator.of(context).pop(_createdDuringMultiScan ? true : null);
+  }
+
+  static String _normalizeBarcodeInput(String barcode) {
+    return barcode.replaceAll(RegExp(r'[^0-9Xx]'), '').trim();
+  }
+
   Future<void> _resumeScanning() async {
     setState(() {
       _detectedBarcode = null;
@@ -164,6 +563,7 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
           scannedBarcode: barcode,
           identificationResult: _lookupResult,
           autofillResult: autofillResult,
+          initialCategory: widget.initialCategory,
         ),
       ),
     );
@@ -188,7 +588,10 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
     }
 
     try {
-      return await _autofillResolver.resolve(identificationResult);
+      return await _autofillResolver.resolve(
+        identificationResult,
+        preferredCategory: widget.initialCategory,
+      );
     } catch (_) {
       return null;
     }
@@ -197,8 +600,10 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
   Future<void> _openAiPhotoId() async {
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) =>
-            AiPhotoIdentificationScreen(seedBarcode: _detectedBarcode),
+        builder: (_) => AiPhotoIdentificationScreen(
+          seedBarcode: _detectedBarcode,
+          initialCategory: widget.initialCategory,
+        ),
       ),
     );
 
@@ -217,7 +622,8 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
   Future<void> _openManualWithoutScan() async {
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) => const ManualAddCollectibleScreen(),
+        builder: (_) =>
+            ManualAddCollectibleScreen(initialCategory: widget.initialCategory),
       ),
     );
 
@@ -230,12 +636,315 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
     }
   }
 
+  Widget _buildScannerModeToggle(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.34),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.18),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Multi-scan', style: textTheme.titleSmall),
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  '${_multiScanItems.length}/$_multiScanLimit scanned',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Switch.adaptive(
+            value: _isMultiScanMode,
+            onChanged: (_) => _toggleMultiScanMode(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScannerCategoryContext(BuildContext context) {
+    final category = widget.initialCategory?.trim();
+    if (category == null || category.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        children: [
+          CategoryIcon(category: category, size: 28),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              'Adding to $category',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(color: AppColors.onSurface),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScannerContent({
+    required BuildContext context,
+    required bool compactPanel,
+    required String? detectedBarcode,
+    required CollectibleIdentificationResult? lookupResult,
+    required String? lookupMessage,
+  }) {
+    if (_isMultiScanMode) {
+      return _buildMultiScanContent(
+        context: context,
+        compactPanel: compactPanel,
+      );
+    }
+
+    return _buildSingleScanContent(
+      context: context,
+      compactPanel: compactPanel,
+      detectedBarcode: detectedBarcode,
+      lookupResult: lookupResult,
+      lookupMessage: lookupMessage,
+    );
+  }
+
+  Widget _buildSingleScanContent({
+    required BuildContext context,
+    required bool compactPanel,
+    required String? detectedBarcode,
+    required CollectibleIdentificationResult? lookupResult,
+    required String? lookupMessage,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (detectedBarcode == null)
+          Text(
+            'Scanning for UPC / EAN',
+            style: Theme.of(context).textTheme.titleMedium,
+          )
+        else
+          Text(
+            _lookupPhase == _LookupPhase.loading
+                ? 'Looking up the barcode'
+                : lookupResult?.hasCatalogMatch == true
+                ? 'Catalog match found'
+                : 'Barcode detected',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        const SizedBox(height: AppSpacing.sm),
+        if (detectedBarcode == null)
+          Text(
+            'The first valid barcode will pause the scanner so you can decide what to do next.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
+          )
+        else ...[
+          _DetectedBarcodeCard(barcode: detectedBarcode),
+          if (_lookupPhase == _LookupPhase.loading) ...[
+            const SizedBox(height: AppSpacing.md),
+            const _LookupLoadingCard(),
+          ] else if (lookupResult?.hasCatalogMatch == true) ...[
+            const SizedBox(height: AppSpacing.md),
+            _LookupPreviewCard(result: lookupResult),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'Review the match, then continue to confirm or refine the details.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.onSurfaceVariant,
+              ),
+            ),
+          ] else if (lookupMessage != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            _LookupNoticeCard(
+              title: _lookupPhase == _LookupPhase.notFound
+                  ? 'Barcode match missed'
+                  : 'Lookup unavailable',
+              description: lookupMessage,
+              icon: _lookupPhase == _LookupPhase.notFound
+                  ? Icons.auto_awesome_rounded
+                  : Icons.cloud_off_rounded,
+            ),
+          ],
+        ],
+        SizedBox(height: compactPanel ? AppSpacing.lg : AppSpacing.xl),
+        if (detectedBarcode == null)
+          SizedBox(
+            width: double.infinity,
+            child: CollectorButton(
+              label: 'Scan manually later',
+              onPressed: _openManualWithoutScan,
+              variant: CollectorButtonVariant.secondary,
+            ),
+          )
+        else
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (lookupResult?.hasCatalogMatch == true) ...[
+                CollectorButton(
+                  label: 'Add details',
+                  onPressed: _continueToManualAdd,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                CollectorButton(
+                  label: 'Scan again',
+                  onPressed: _resumeScanning,
+                  variant: CollectorButtonVariant.secondary,
+                ),
+              ] else ...[
+                CollectorButton(
+                  label: 'Try AI Photo ID',
+                  onPressed: _openAiPhotoId,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                CollectorButton(
+                  label: 'Add details manually',
+                  onPressed: _continueToManualAdd,
+                  variant: CollectorButtonVariant.secondary,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                CollectorButton(
+                  label: 'Scan again',
+                  onPressed: _resumeScanning,
+                  variant: CollectorButtonVariant.tertiary,
+                ),
+              ],
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _buildMultiScanContent({
+    required BuildContext context,
+    required bool compactPanel,
+  }) {
+    final readyCount = _multiScanItems.where((item) => item.canReview).length;
+    final isChecking = _multiScanItems.any(
+      (item) =>
+          item.status == _MultiScanItemStatus.queued ||
+          item.status == _MultiScanItemStatus.loading,
+    );
+    final canReview = readyCount > 0;
+    final isTrayFull = _multiScanItems.length >= _multiScanLimit;
+    final shouldShowNotice = (_multiScanNotice ?? '').isNotEmpty && !isTrayFull;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Multi-scan',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: AppSpacing.xxs),
+                  Text(
+                    '${_multiScanItems.length}/$_multiScanLimit scanned',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isChecking)
+              Text(
+                'Checking',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ),
+          ],
+        ),
+        if (shouldShowNotice) ...[
+          const SizedBox(height: AppSpacing.sm),
+          _MultiScanNotice(message: _multiScanNotice!),
+        ],
+        const SizedBox(height: AppSpacing.sm),
+        if (_multiScanItems.isEmpty)
+          const _MultiScanEmptyTray()
+        else
+          _MultiScanTrayList(
+            items: _multiScanItems,
+            onAddDetails: _continueToManualAddForMultiScanItem,
+            onAiPhoto: _openAiPhotoIdForMultiScanItem,
+            onRetry: _retryMultiScanItem,
+            onRemove: _removeMultiScanItem,
+          ),
+        SizedBox(height: compactPanel ? AppSpacing.lg : AppSpacing.xl),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            CollectorButton(
+              label: canReview
+                  ? 'Review $readyCount ${readyCount == 1 ? 'item' : 'items'}'
+                  : isChecking
+                  ? 'Checking barcodes'
+                  : 'Scan items first',
+              onPressed: canReview ? _reviewNextMultiScanItem : null,
+              isLoading: isChecking && !canReview,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            CollectorButton(
+              label: 'Add one manually',
+              onPressed: _openManualWithoutScan,
+              variant: CollectorButtonVariant.secondary,
+            ),
+            if (_multiScanItems.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.sm),
+              CollectorButton(
+                label: 'Clear tray',
+                onPressed: _clearMultiScanTray,
+                variant: CollectorButtonVariant.tertiary,
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final detectedBarcode = _detectedBarcode;
     final lookupResult = _lookupResult;
     final lookupMessage = _lookupMessage;
-    final showScannerPreview = detectedBarcode == null;
+    final showScannerPreview = detectedBarcode == null && !_isScannerPaused;
+    final shouldFocusMultiScanResults =
+        _isMultiScanMode && _multiScanItems.isNotEmpty && _isScannerPaused;
+    final shouldShowModeToggle = !_isMultiScanMode || _multiScanItems.isEmpty;
 
     return Scaffold(
       body: Stack(
@@ -301,6 +1010,12 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                                               height: previewHeight,
                                             ),
                                           )
+                                        : shouldFocusMultiScanResults
+                                        ? const SizedBox.shrink(
+                                            key: ValueKey(
+                                              'multi-scan-results-focus',
+                                            ),
+                                          )
                                         : Padding(
                                             key: const ValueKey(
                                               'scanner-paused',
@@ -310,135 +1025,31 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                                             ),
                                             child: _ScannerPausedBanner(
                                               isLoading:
+                                                  !_isMultiScanMode &&
                                                   _lookupPhase ==
-                                                  _LookupPhase.loading,
+                                                      _LookupPhase.loading,
+                                              message: _isMultiScanMode
+                                                  ? 'Multi-scan tray is full. Review or clear items to scan more.'
+                                                  : null,
                                             ),
                                           ),
                                   ),
-                                  if (detectedBarcode == null)
-                                    Text(
-                                      'Scanning for UPC / EAN',
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.titleMedium,
-                                    )
-                                  else
-                                    Text(
-                                      _lookupPhase == _LookupPhase.loading
-                                          ? 'Looking up the barcode'
-                                          : lookupResult?.hasCatalogMatch ==
-                                                true
-                                          ? 'Catalog match found'
-                                          : 'Barcode detected',
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.titleMedium,
-                                    ),
-                                  const SizedBox(height: AppSpacing.sm),
-                                  if (detectedBarcode == null)
-                                    Text(
-                                      'The first valid barcode will pause the scanner so you can decide what to do next.',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium
-                                          ?.copyWith(
-                                            color: AppColors.onSurfaceVariant,
-                                          ),
-                                    )
-                                  else ...[
-                                    _DetectedBarcodeCard(
-                                      barcode: detectedBarcode,
-                                    ),
-                                    if (_lookupPhase ==
-                                        _LookupPhase.loading) ...[
-                                      const SizedBox(height: AppSpacing.md),
-                                      const _LookupLoadingCard(),
-                                    ] else if (lookupResult?.hasCatalogMatch ==
-                                        true) ...[
-                                      const SizedBox(height: AppSpacing.md),
-                                      _LookupPreviewCard(result: lookupResult),
-                                      const SizedBox(height: AppSpacing.sm),
-                                      Text(
-                                        'Review the match, then continue to confirm or refine the details.',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodyMedium
-                                            ?.copyWith(
-                                              color: AppColors.onSurfaceVariant,
-                                            ),
-                                      ),
-                                    ] else if (lookupMessage != null) ...[
-                                      const SizedBox(height: AppSpacing.md),
-                                      _LookupNoticeCard(
-                                        title:
-                                            _lookupPhase ==
-                                                _LookupPhase.notFound
-                                            ? 'Barcode match missed'
-                                            : 'Lookup unavailable',
-                                        description: lookupMessage,
-                                        icon:
-                                            _lookupPhase ==
-                                                _LookupPhase.notFound
-                                            ? Icons.auto_awesome_rounded
-                                            : Icons.cloud_off_rounded,
-                                      ),
-                                    ],
+                                  _buildScannerCategoryContext(context),
+                                  if ((widget.initialCategory ?? '')
+                                      .trim()
+                                      .isNotEmpty)
+                                    const SizedBox(height: AppSpacing.lg),
+                                  if (shouldShowModeToggle) ...[
+                                    _buildScannerModeToggle(context),
+                                    const SizedBox(height: AppSpacing.lg),
                                   ],
-                                  SizedBox(
-                                    height: compactPanel
-                                        ? AppSpacing.lg
-                                        : AppSpacing.xl,
+                                  _buildScannerContent(
+                                    context: context,
+                                    compactPanel: compactPanel,
+                                    detectedBarcode: detectedBarcode,
+                                    lookupResult: lookupResult,
+                                    lookupMessage: lookupMessage,
                                   ),
-                                  if (detectedBarcode == null)
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: CollectorButton(
-                                        label: 'Scan manually later',
-                                        onPressed: _openManualWithoutScan,
-                                        variant:
-                                            CollectorButtonVariant.secondary,
-                                      ),
-                                    )
-                                  else
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        if (lookupResult?.hasCatalogMatch ==
-                                            true) ...[
-                                          CollectorButton(
-                                            label: 'Add details',
-                                            onPressed: _continueToManualAdd,
-                                          ),
-                                          const SizedBox(height: AppSpacing.md),
-                                          CollectorButton(
-                                            label: 'Scan again',
-                                            onPressed: _resumeScanning,
-                                            variant: CollectorButtonVariant
-                                                .secondary,
-                                          ),
-                                        ] else ...[
-                                          CollectorButton(
-                                            label: 'Try AI Photo ID',
-                                            onPressed: _openAiPhotoId,
-                                          ),
-                                          const SizedBox(height: AppSpacing.md),
-                                          CollectorButton(
-                                            label: 'Add details manually',
-                                            onPressed: _continueToManualAdd,
-                                            variant: CollectorButtonVariant
-                                                .secondary,
-                                          ),
-                                          const SizedBox(height: AppSpacing.sm),
-                                          CollectorButton(
-                                            label: 'Scan again',
-                                            onPressed: _resumeScanning,
-                                            variant:
-                                                CollectorButtonVariant.tertiary,
-                                          ),
-                                        ],
-                                      ],
-                                    ),
                                 ],
                               ),
                             ),
@@ -451,8 +1062,77 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
               ),
             ),
           ),
-          CollectorStickyBackButton(
-            onPressed: () => Navigator.of(context).pop(),
+          CollectorStickyBackButton(onPressed: _closeScanner),
+        ],
+      ),
+    );
+  }
+}
+
+class _MultiScanNotice extends StatelessWidget {
+  const _MultiScanNotice({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Text(
+        message,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: AppColors.onSurfaceVariant),
+      ),
+    );
+  }
+}
+
+class _MultiScanEmptyTray extends StatelessWidget {
+  const _MultiScanEmptyTray();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.36),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.18),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.qr_code_scanner_rounded,
+              color: AppColors.primary,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Text(
+              'Scan the first barcode to start the tray.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.onSurfaceVariant,
+              ),
+            ),
           ),
         ],
       ),
@@ -460,10 +1140,289 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
   }
 }
 
+class _MultiScanTrayList extends StatelessWidget {
+  const _MultiScanTrayList({
+    required this.items,
+    required this.onAddDetails,
+    required this.onAiPhoto,
+    required this.onRetry,
+    required this.onRemove,
+  });
+
+  final List<_MultiScanTrayItem> items;
+  final void Function(_MultiScanTrayItem item) onAddDetails;
+  final void Function(_MultiScanTrayItem item) onAiPhoto;
+  final void Function(_MultiScanTrayItem item) onRetry;
+  final void Function(_MultiScanTrayItem item) onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: items.length >= 5 ? 340 : 260),
+      child: ListView.separated(
+        primary: false,
+        shrinkWrap: true,
+        itemCount: items.length,
+        separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.xs),
+        itemBuilder: (context, index) {
+          return _MultiScanTrayRow(
+            item: items[index],
+            onAddDetails: onAddDetails,
+            onAiPhoto: onAiPhoto,
+            onRetry: onRetry,
+            onRemove: onRemove,
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MultiScanTrayRow extends StatelessWidget {
+  const _MultiScanTrayRow({
+    required this.item,
+    required this.onAddDetails,
+    required this.onAiPhoto,
+    required this.onRetry,
+    required this.onRemove,
+  });
+
+  final _MultiScanTrayItem item;
+  final void Function(_MultiScanTrayItem item) onAddDetails;
+  final void Function(_MultiScanTrayItem item) onAiPhoto;
+  final void Function(_MultiScanTrayItem item) onRetry;
+  final void Function(_MultiScanTrayItem item) onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final result = item.lookupResult;
+    final statusLabel = _statusLabel(item.status);
+    final primaryText = result?.title.trim().isNotEmpty == true
+        ? result!.title
+        : item.barcode;
+    final secondaryText = result?.title.trim().isNotEmpty == true
+        ? item.barcode
+        : item.message ?? _helperText(item.status);
+
+    return Material(
+      color: AppColors.surfaceContainerHighest.withValues(alpha: 0.36),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: item.canReview ? () => onAddDetails(item) : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm,
+            vertical: AppSpacing.xs,
+          ),
+          child: Row(
+            children: [
+              _MultiScanTrayThumbnail(item: item),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            primaryText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.labelLarge,
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.xs),
+                        Text(
+                          statusLabel,
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(color: AppColors.primary),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      secondaryText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              _MultiScanTrayRowMenu(
+                item: item,
+                onAddDetails: onAddDetails,
+                onAiPhoto: onAiPhoto,
+                onRetry: onRetry,
+                onRemove: onRemove,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _statusLabel(_MultiScanItemStatus status) {
+    return switch (status) {
+      _MultiScanItemStatus.queued => 'Queued',
+      _MultiScanItemStatus.loading => 'Looking up',
+      _MultiScanItemStatus.found => 'Found',
+      _MultiScanItemStatus.notFound => 'No match',
+      _MultiScanItemStatus.failed => 'Needs retry',
+    };
+  }
+
+  static String _helperText(_MultiScanItemStatus status) {
+    return switch (status) {
+      _MultiScanItemStatus.queued => 'Waiting in line.',
+      _MultiScanItemStatus.loading => 'Checking the catalog.',
+      _MultiScanItemStatus.found => 'Tap to review.',
+      _MultiScanItemStatus.notFound => 'Manual add or AI Photo ID.',
+      _MultiScanItemStatus.failed => 'Retry or add manually.',
+    };
+  }
+
+  static IconData _statusIcon(_MultiScanItemStatus status) {
+    return switch (status) {
+      _MultiScanItemStatus.queued => Icons.pending_actions_rounded,
+      _MultiScanItemStatus.loading => Icons.search_rounded,
+      _MultiScanItemStatus.found => Icons.check_circle_rounded,
+      _MultiScanItemStatus.notFound => Icons.manage_search_rounded,
+      _MultiScanItemStatus.failed => Icons.refresh_rounded,
+    };
+  }
+}
+
+class _MultiScanTrayThumbnail extends StatelessWidget {
+  const _MultiScanTrayThumbnail({required this.item});
+
+  final _MultiScanTrayItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final imageUrl = item.lookupResult?.imageUrl?.trim();
+    final hasImage = imageUrl != null && imageUrl.isNotEmpty;
+
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: hasImage
+          ? Image.network(
+              imageUrl,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => _MultiScanTrayStatusIcon(item: item),
+            )
+          : _MultiScanTrayStatusIcon(item: item),
+    );
+  }
+}
+
+class _MultiScanTrayStatusIcon extends StatelessWidget {
+  const _MultiScanTrayStatusIcon({required this.item});
+
+  final _MultiScanTrayItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.status == _MultiScanItemStatus.loading) {
+      return const Padding(
+        padding: EdgeInsets.all(12),
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
+
+    return Icon(
+      _MultiScanTrayRow._statusIcon(item.status),
+      color: AppColors.primary,
+      size: 20,
+    );
+  }
+}
+
+class _MultiScanTrayRowMenu extends StatelessWidget {
+  const _MultiScanTrayRowMenu({
+    required this.item,
+    required this.onAddDetails,
+    required this.onAiPhoto,
+    required this.onRetry,
+    required this.onRemove,
+  });
+
+  final _MultiScanTrayItem item;
+  final void Function(_MultiScanTrayItem item) onAddDetails;
+  final void Function(_MultiScanTrayItem item) onAiPhoto;
+  final void Function(_MultiScanTrayItem item) onRetry;
+  final void Function(_MultiScanTrayItem item) onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<_MultiScanTrayAction>(
+      tooltip: 'Item actions',
+      icon: const Icon(Icons.more_horiz_rounded),
+      color: AppColors.surfaceContainerHigh,
+      onSelected: (action) {
+        switch (action) {
+          case _MultiScanTrayAction.addDetails:
+            onAddDetails(item);
+            break;
+          case _MultiScanTrayAction.aiPhoto:
+            onAiPhoto(item);
+            break;
+          case _MultiScanTrayAction.retry:
+            onRetry(item);
+            break;
+          case _MultiScanTrayAction.remove:
+            onRemove(item);
+            break;
+        }
+      },
+      itemBuilder: (context) => [
+        if (item.canReview)
+          PopupMenuItem(
+            value: _MultiScanTrayAction.addDetails,
+            child: Text(
+              item.status == _MultiScanItemStatus.found
+                  ? 'Add details'
+                  : 'Add manually',
+            ),
+          ),
+        if (item.canReview)
+          const PopupMenuItem(
+            value: _MultiScanTrayAction.aiPhoto,
+            child: Text('AI Photo ID'),
+          ),
+        if (item.status == _MultiScanItemStatus.failed)
+          const PopupMenuItem(
+            value: _MultiScanTrayAction.retry,
+            child: Text('Retry'),
+          ),
+        const PopupMenuItem(
+          value: _MultiScanTrayAction.remove,
+          child: Text('Remove'),
+        ),
+      ],
+    );
+  }
+}
+
+enum _MultiScanTrayAction { addDetails, aiPhoto, retry, remove }
+
 class _ScannerPausedBanner extends StatelessWidget {
-  const _ScannerPausedBanner({required this.isLoading});
+  const _ScannerPausedBanner({required this.isLoading, this.message});
 
   final bool isLoading;
+  final String? message;
 
   @override
   Widget build(BuildContext context) {
@@ -498,9 +1457,10 @@ class _ScannerPausedBanner extends StatelessWidget {
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
-              isLoading
-                  ? 'Scanner paused while we look for a catalog match.'
-                  : 'Scanner paused. Review the result below or scan again.',
+              message ??
+                  (isLoading
+                      ? 'Scanner paused while we look for a catalog match.'
+                      : 'Scanner paused. Review the result below or scan again.'),
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: AppColors.onSurfaceVariant,
               ),

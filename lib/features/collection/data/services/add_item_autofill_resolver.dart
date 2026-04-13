@@ -13,29 +13,36 @@ class AddItemAutofillResolver {
   final CollectionVocabularyRepository _vocabularyRepository;
 
   Future<AddItemAutofillResult> resolve(
-    CollectibleIdentificationResult identificationResult,
-  ) async {
+    CollectibleIdentificationResult identificationResult, {
+    String? preferredCategory,
+  }) async {
     final vocabulary = await _vocabularyRepository.fetch();
     return resolveWithVocabulary(
       identificationResult: identificationResult,
       vocabulary: vocabulary,
+      preferredCategory: preferredCategory,
     );
   }
 
   AddItemAutofillResult resolveWithVocabulary({
     required CollectibleIdentificationResult identificationResult,
     required UserCollectionVocabulary vocabulary,
+    String? preferredCategory,
   }) {
-    final formMode = identificationResult.isComicLike
-        ? AddItemFormMode.comic
-        : AddItemFormMode.general;
+    final formMode = _resolveFormMode(
+      identificationResult: identificationResult,
+      preferredCategory: preferredCategory,
+    );
 
     final brandCandidate = formMode == AddItemFormMode.comic
         ? identificationResult.publisherCandidate
         : identificationResult.brand;
-    final seriesCandidate = formMode == AddItemFormMode.comic
+    final rawSeriesCandidate = formMode == AddItemFormMode.comic
         ? identificationResult.volumeCandidate
         : identificationResult.series;
+    final seriesCandidate = _isUsefulSeriesCandidate(rawSeriesCandidate)
+        ? rawSeriesCandidate
+        : null;
 
     return AddItemAutofillResult(
       formMode: formMode,
@@ -65,6 +72,24 @@ class AddItemAutofillResolver {
     );
   }
 
+  AddItemFormMode _resolveFormMode({
+    required CollectibleIdentificationResult identificationResult,
+    required String? preferredCategory,
+  }) {
+    final normalizedPreferredCategory = (preferredCategory ?? '')
+        .trim()
+        .toLowerCase();
+    if (normalizedPreferredCategory.isNotEmpty) {
+      return normalizedPreferredCategory == 'comics'
+          ? AddItemFormMode.comic
+          : AddItemFormMode.general;
+    }
+
+    return identificationResult.isComicLike
+        ? AddItemFormMode.comic
+        : AddItemFormMode.general;
+  }
+
   List<AddItemAutofillTagSuggestion> _resolveTagSuggestions({
     required CollectibleIdentificationResult identificationResult,
     required UserCollectionVocabulary vocabulary,
@@ -88,6 +113,10 @@ class AddItemAutofillResolver {
     final uniqueCandidates = <String>[];
     final seen = <String>{};
     for (final candidate in candidates) {
+      if (!_isUsefulTagCandidate(candidate)) {
+        continue;
+      }
+
       final normalized = _normalize(candidate);
       if (normalized.isEmpty) {
         continue;
@@ -294,5 +323,35 @@ class AddItemAutofillResolver {
   String? _clean(String? value) {
     final cleaned = value?.trim();
     return cleaned == null || cleaned.isEmpty ? null : cleaned;
+  }
+
+  bool _isUsefulTagCandidate(String value) {
+    final cleaned = _clean(value);
+    return cleaned != null &&
+        RegExp(r'[A-Za-z]').hasMatch(cleaned) &&
+        !_isCompactCodeLike(cleaned);
+  }
+
+  bool _isUsefulSeriesCandidate(String? value) {
+    final cleaned = _clean(value);
+    if (cleaned == null || !RegExp(r'[A-Za-z]').hasMatch(cleaned)) {
+      return false;
+    }
+
+    return !_isCompactCodeLike(cleaned);
+  }
+
+  bool _isCompactCodeLike(String cleaned) {
+    final compact = cleaned.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+    if (compact.isEmpty) {
+      return true;
+    }
+
+    final hasSeparator = RegExp(r'[^A-Za-z0-9]').hasMatch(cleaned);
+    final hasLowercase = RegExp(r'[a-z]').hasMatch(cleaned);
+    return !hasLowercase &&
+        !hasSeparator &&
+        RegExp(r'^[A-Z0-9]+$').hasMatch(compact) &&
+        compact.length > 5;
   }
 }
