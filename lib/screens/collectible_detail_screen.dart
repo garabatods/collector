@@ -1,15 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../core/collector_haptics.dart';
 import '../core/data/archive_types.dart';
 import '../features/collection/data/models/collectible_model.dart';
-import '../features/collection/data/repositories/collectible_photos_repository.dart';
-import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_photo_view.dart';
 import '../widgets/collector_chip.dart';
 import '../widgets/collector_panel.dart';
-import '../widgets/collector_snack_bar.dart';
 import '../widgets/collector_sticky_back_button.dart';
 import 'manual_add_collectible_screen.dart';
 
@@ -32,12 +30,8 @@ class CollectibleDetailScreen extends StatefulWidget {
 }
 
 class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
-  final _collectiblesRepository = CollectiblesRepository();
-  final _photosRepository = CollectiblePhotosRepository();
-
-  bool _isDeleting = false;
-
   Future<void> _editItem() async {
+    CollectorHaptics.light();
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => ManualAddCollectibleScreen(
@@ -53,78 +47,6 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
     }
 
     Navigator.of(context).pop(true);
-  }
-
-  Future<void> _deleteItem() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: AppColors.surfaceContainerHigh,
-          title: const Text('Delete item?'),
-          content: const Text(
-            'This will remove the collectible and its saved photo from your collection.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              style: FilledButton.styleFrom(backgroundColor: AppColors.error),
-              child: const Text('Delete'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (confirmed != true) {
-      return;
-    }
-
-    final collectibleId = widget.collectible.id;
-    if (collectibleId == null) {
-      return;
-    }
-
-    setState(() {
-      _isDeleting = true;
-    });
-
-    try {
-      await _photosRepository.deleteAllForCollectible(collectibleId);
-      await _collectiblesRepository.delete(collectibleId);
-
-      if (!mounted) {
-        return;
-      }
-
-      final messenger = ScaffoldMessenger.of(context);
-      Navigator.of(context).pop(true);
-      CollectorSnackBar.showOn(
-        messenger,
-        message: 'Removed from collection.',
-        tone: CollectorSnackBarTone.success,
-      );
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-
-      CollectorSnackBar.show(
-        context,
-        message: 'Could not remove this item right now.',
-        tone: CollectorSnackBarTone.error,
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isDeleting = false;
-        });
-      }
-    }
   }
 
   @override
@@ -201,54 +123,28 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
                           children: [
                             const SizedBox(width: 48, height: 48),
                             const Spacer(),
-                            PopupMenuButton<_DetailAction>(
-                              enabled: !_isDeleting,
-                              color: AppColors.surfaceContainerHigh,
-                              onSelected: (action) {
-                                switch (action) {
-                                  case _DetailAction.edit:
-                                    _editItem();
-                                    break;
-                                  case _DetailAction.delete:
-                                    _deleteItem();
-                                    break;
-                                }
-                              },
-                              itemBuilder: (context) {
-                                return const [
-                                  PopupMenuItem(
-                                    value: _DetailAction.edit,
-                                    child: Text('Edit item'),
-                                  ),
-                                  PopupMenuItem(
-                                    value: _DetailAction.delete,
-                                    child: Text('Delete item'),
-                                  ),
-                                ];
-                              },
-                              child: Container(
-                                width: 48,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                  color: AppColors.surfaceContainerHighest,
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
+                            SizedBox(
+                              height: 48,
+                              child: OutlinedButton.icon(
+                                onPressed: _editItem,
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppColors.primary,
+                                  side: BorderSide(
                                     color: AppColors.outlineVariant.withValues(
-                                      alpha: 0.2,
+                                      alpha: 0.28,
                                     ),
                                   ),
+                                  backgroundColor:
+                                      AppColors.surfaceContainerHighest,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: AppSpacing.md,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
                                 ),
-                                child: _isDeleting
-                                    ? const Padding(
-                                        padding: EdgeInsets.all(12),
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(
-                                        Icons.more_horiz_rounded,
-                                        color: AppColors.primary,
-                                      ),
+                                icon: const Icon(Icons.edit_outlined, size: 18),
+                                label: const Text('Edit'),
                               ),
                             ),
                           ],
@@ -375,8 +271,6 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
   }
 }
 
-enum _DetailAction { edit, delete }
-
 class _DetailHero extends StatelessWidget {
   const _DetailHero({
     required this.collectible,
@@ -395,6 +289,8 @@ class _DetailHero extends StatelessWidget {
         ? AppColors.tertiary
         : AppColors.secondary;
     final subtitleParts = _distinctNonEmptyText([collectible.brand]);
+    final heroTag =
+        'detail-photo-${photoRef?.remoteUrl ?? photoRef?.localPath ?? collectible.id ?? collectible.title}';
     return CollectorPanel(
       padding: const EdgeInsets.all(AppSpacing.sm),
       backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.94),
@@ -403,7 +299,7 @@ class _DetailHero extends StatelessWidget {
         children: [
           Container(
             width: double.infinity,
-            height: 308,
+            height: 380,
             decoration: BoxDecoration(
               color: AppColors.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(32),
@@ -420,61 +316,88 @@ class _DetailHero extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  ArchivePhotoView(
-                    photoRef: photoRef,
-                    fit: BoxFit.cover,
-                    placeholder: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            accentColor.withValues(alpha: 0.34),
-                            secondaryAccent.withValues(alpha: 0.24),
-                            AppColors.surfaceContainerHighest,
-                          ],
+                  Hero(
+                    tag: heroTag,
+                    child: ArchivePhotoView(
+                      photoRef: photoRef,
+                      fit: BoxFit.cover,
+                      placeholder: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              accentColor.withValues(alpha: 0.34),
+                              secondaryAccent.withValues(alpha: 0.24),
+                              AppColors.surfaceContainerHighest,
+                            ],
+                          ),
+                        ),
+                        child: const Center(
+                          child: Icon(
+                            Icons.photo_outlined,
+                            color: AppColors.onSurfaceVariant,
+                            size: 54,
+                          ),
                         ),
                       ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.photo_outlined,
-                          color: AppColors.onSurfaceVariant,
-                          size: 54,
+                      error: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              accentColor.withValues(alpha: 0.34),
+                              secondaryAccent.withValues(alpha: 0.24),
+                              AppColors.surfaceContainerHighest,
+                            ],
+                          ),
                         ),
-                      ),
-                    ),
-                    error: DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            accentColor.withValues(alpha: 0.34),
-                            secondaryAccent.withValues(alpha: 0.24),
-                            AppColors.surfaceContainerHighest,
-                          ],
-                        ),
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.broken_image_outlined,
-                          color: AppColors.onSurfaceVariant,
-                          size: 54,
+                        child: const Center(
+                          child: Icon(
+                            Icons.broken_image_outlined,
+                            color: AppColors.onSurfaceVariant,
+                            size: 54,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          AppColors.background.withValues(alpha: 0.28),
-                          AppColors.background.withValues(alpha: 0.92),
-                        ],
-                        stops: const [0.0, 0.56, 1.0],
+                  if (_hasArchivePhoto(photoRef))
+                    Positioned.fill(
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            CollectorHaptics.light();
+                            Navigator.of(context).push(
+                              PageRouteBuilder<void>(
+                                opaque: false,
+                                pageBuilder: (_, _, _) =>
+                                    _FullscreenPhotoScreen(
+                                      photoRef: photoRef,
+                                      heroTag: heroTag,
+                                    ),
+                              ),
+                            );
+                          },
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
+                    ),
+                  IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            AppColors.background.withValues(alpha: 0.28),
+                            AppColors.background.withValues(alpha: 0.92),
+                          ],
+                          stops: const [0.0, 0.56, 1.0],
+                        ),
                       ),
                     ),
                   ),
@@ -482,68 +405,116 @@ class _DetailHero extends StatelessWidget {
                     top: AppSpacing.md,
                     left: AppSpacing.md,
                     right: AppSpacing.md,
-                    child: Wrap(
-                      spacing: AppSpacing.sm,
-                      runSpacing: AppSpacing.sm,
-                      children: [
-                        CollectorChip(label: collectible.category),
-                        if (collectible.isFavorite)
-                          const CollectorChip(
-                            label: 'Favorite',
-                            tone: CollectorChipTone.primary,
-                          ),
-                        if (collectible.isGrail)
-                          const CollectorChip(
-                            label: 'Grail',
-                            tone: CollectorChipTone.secondary,
-                          ),
-                        if (collectible.isDuplicate)
-                          const CollectorChip(
-                            label: 'Duplicate',
-                            tone: CollectorChipTone.tertiary,
-                          ),
-                      ],
+                    child: IgnorePointer(
+                      child: Wrap(
+                        spacing: AppSpacing.sm,
+                        runSpacing: AppSpacing.sm,
+                        children: [
+                          CollectorChip(label: collectible.category),
+                          if (collectible.isFavorite)
+                            const CollectorChip(
+                              label: 'Favorite',
+                              tone: CollectorChipTone.primary,
+                            ),
+                          if (collectible.isGrail)
+                            const CollectorChip(
+                              label: 'Grail',
+                              tone: CollectorChipTone.secondary,
+                            ),
+                          if (collectible.isDuplicate)
+                            const CollectorChip(
+                              label: 'Duplicate',
+                              tone: CollectorChipTone.tertiary,
+                            ),
+                        ],
+                      ),
                     ),
                   ),
+                  const Positioned(
+                    top: AppSpacing.md,
+                    right: AppSpacing.md,
+                    child: IgnorePointer(child: _HeroExpandHint()),
+                  ),
                   Positioned(
-                    left: AppSpacing.lg,
-                    right: AppSpacing.lg,
-                    bottom: AppSpacing.lg,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (subtitleParts.isNotEmpty)
-                          Text(
-                            subtitleParts.join(' • ').toUpperCase(),
-                            style: Theme.of(context).textTheme.labelMedium
-                                ?.copyWith(
-                                  color: accentColor.withValues(alpha: 0.95),
-                                  fontSize: 11,
-                                  letterSpacing: 1.4,
-                                ),
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              AppColors.background.withValues(alpha: 0.18),
+                              AppColors.background.withValues(alpha: 0.88),
+                            ],
+                            stops: const [0.0, 0.22, 1.0],
                           ),
-                        if (subtitleParts.isNotEmpty)
-                          const SizedBox(height: AppSpacing.xs),
-                        Text(
-                          collectible.title,
-                          style: Theme.of(context).textTheme.headlineLarge
-                              ?.copyWith(fontSize: 23, height: 1.06),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: AppSpacing.xs),
-                        Text(
-                          _buildHeroSummary(collectible),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(
-                                color: AppColors.onSurfaceVariant,
-                                fontSize: 14,
-                                height: 1.35,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            AppSpacing.lg,
+                            AppSpacing.xl,
+                            AppSpacing.lg,
+                            AppSpacing.lg,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (subtitleParts.isNotEmpty)
+                                Text(
+                                  subtitleParts.join(' • ').toUpperCase(),
+                                  style: Theme.of(context).textTheme.labelMedium
+                                      ?.copyWith(
+                                        color: accentColor.withValues(
+                                          alpha: 0.98,
+                                        ),
+                                        fontSize: 10.5,
+                                        letterSpacing: 1.2,
+                                      ),
+                                ),
+                              if (subtitleParts.isNotEmpty)
+                                const SizedBox(height: AppSpacing.xs),
+                              Text(
+                                collectible.title,
+                                style: Theme.of(context).textTheme.headlineLarge
+                                    ?.copyWith(
+                                      fontSize: 20,
+                                      height: 1.16,
+                                      letterSpacing: 0,
+                                      shadows: [
+                                        Shadow(
+                                          color: Colors.black.withValues(
+                                            alpha: 0.26,
+                                          ),
+                                          blurRadius: 12,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                               ),
+                              const SizedBox(height: AppSpacing.xs),
+                              Text(
+                                _buildHeroSummary(collectible),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      color: AppColors.onSurface.withValues(
+                                        alpha: 0.72,
+                                      ),
+                                      fontSize: 13.5,
+                                      height: 1.4,
+                                    ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ],
@@ -852,6 +823,30 @@ class _HeroMetricCard extends StatelessWidget {
   }
 }
 
+class _HeroExpandHint extends StatelessWidget {
+  const _HeroExpandHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.34),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.24),
+        ),
+      ),
+      child: const Icon(
+        Icons.open_in_full_rounded,
+        size: 18,
+        color: AppColors.onSurface,
+      ),
+    );
+  }
+}
+
 class _HeroValueStrip extends StatelessWidget {
   const _HeroValueStrip({
     required this.purchasePrice,
@@ -908,6 +903,41 @@ class _HeroValueStrip extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _FullscreenPhotoScreen extends StatelessWidget {
+  const _FullscreenPhotoScreen({required this.photoRef, required this.heroTag});
+
+  final ArchivePhotoRef? photoRef;
+  final String heroTag;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => Navigator.of(context).pop(),
+        child: SafeArea(
+          child: Center(
+            child: Hero(
+              tag: heroTag,
+              child: InteractiveViewer(
+                minScale: 1,
+                maxScale: 4,
+                child: ArchivePhotoView(
+                  photoRef: photoRef,
+                  fit: BoxFit.contain,
+                  placeholder: const SizedBox.shrink(),
+                  error: const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1052,6 +1082,16 @@ String _buildHeroSummary(CollectibleModel collectible) {
 bool _isComicCollectible(CollectibleModel collectible) {
   return collectible.category.trim().toLowerCase() == 'comics' ||
       (collectible.itemNumber ?? '').trim().isNotEmpty;
+}
+
+bool _hasArchivePhoto(ArchivePhotoRef? photoRef) {
+  final localPath = photoRef?.localPath?.trim();
+  if (localPath != null && localPath.isNotEmpty) {
+    return true;
+  }
+
+  final remoteUrl = photoRef?.remoteUrl?.trim();
+  return remoteUrl != null && remoteUrl.isNotEmpty;
 }
 
 List<String> _distinctNonEmptyText(Iterable<String?> values) {

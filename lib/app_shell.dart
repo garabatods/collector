@@ -10,7 +10,7 @@ class AppShell extends StatefulWidget {
   const AppShell({
     super.key,
     required this.isSupabaseConfigured,
-    this.splashDelay = const Duration(milliseconds: 2500),
+    this.splashDelay = const Duration(milliseconds: 3000),
   });
 
   final bool isSupabaseConfigured;
@@ -27,9 +27,7 @@ class _AppShellState extends State<AppShell> {
   @override
   void initState() {
     super.initState();
-    _authService = AuthService(
-      isConfigured: widget.isSupabaseConfigured,
-    );
+    _authService = AuthService(isConfigured: widget.isSupabaseConfigured);
     _controller = AuthController(
       authService: _authService,
       splashDelay: widget.splashDelay,

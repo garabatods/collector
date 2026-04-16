@@ -33,9 +33,7 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
     }
 
     try {
-      await _ensureFreshSession();
-      final response = await client.functions.invoke(
-        'identify_collectible',
+      final response = await _invokeIdentifyCollectible(
         body: {
           'mode': 'barcode',
           'barcode': normalizedBarcode,
@@ -80,9 +78,7 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
     }
 
     try {
-      await _ensureFreshSession();
-      final response = await client.functions.invoke(
-        'identify_collectible',
+      final response = await _invokeIdentifyCollectible(
         body: {
           'mode': 'photo',
           'image_base64': base64Encode(imageBytes),
@@ -122,15 +118,78 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
     return normalized;
   }
 
-  Future<void> _ensureFreshSession() async {
+  Future<FunctionResponse> _invokeIdentifyCollectible({
+    required Object body,
+  }) async {
+    final session = _requireSession();
+    try {
+      return await _invokeFunctionWithToken(
+        accessToken: session.accessToken,
+        body: body,
+      );
+    } on FunctionException catch (error) {
+      if (!_isInvalidJwtError(error)) {
+        rethrow;
+      }
+
+      final refreshedSession = await _refreshSession(session);
+      return _invokeFunctionWithToken(
+        accessToken: refreshedSession.accessToken,
+        body: body,
+      );
+    }
+  }
+
+  Future<FunctionResponse> _invokeFunctionWithToken({
+    required String accessToken,
+    required Object body,
+  }) {
+    client.functions.setAuth(accessToken);
+    return client.functions.invoke(
+      'identify_collectible',
+      headers: {'Authorization': 'Bearer $accessToken'},
+      body: body,
+    );
+  }
+
+  Session _requireSession() {
     final session = client.auth.currentSession;
     if (session == null) {
       throw const CollectibleIdentificationException(
         'You need to be signed in to identify collectibles.',
       );
     }
+    return session;
+  }
 
-    await client.auth.refreshSession();
+  Future<Session> _refreshSession(Session session) async {
+    final refreshed = await client.auth.refreshSession(session.refreshToken);
+    final nextSession = refreshed.session ?? client.auth.currentSession;
+    if (nextSession == null) {
+      throw const CollectibleIdentificationException(
+        'You need to be signed in to identify collectibles.',
+      );
+    }
+    return nextSession;
+  }
+
+  static bool _isInvalidJwtError(FunctionException error) {
+    final details = error.details;
+    if (details is JsonMap) {
+      final message =
+          asNullableString(details['error']) ??
+          asNullableString(details['message']);
+      return (message ?? '').toLowerCase().contains('invalid jwt');
+    }
+    if (details is Map) {
+      final message =
+          asNullableString(details['error']) ??
+          asNullableString(details['message']);
+      return (message ?? '').toLowerCase().contains('invalid jwt');
+    }
+    return (asNullableString(error.reasonPhrase) ?? '').toLowerCase().contains(
+      'invalid jwt',
+    );
   }
 
   static String? _messageFromFunctionException(FunctionException error) {

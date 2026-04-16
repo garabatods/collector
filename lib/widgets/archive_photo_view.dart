@@ -24,28 +24,50 @@ class ArchivePhotoView extends StatelessWidget {
   Widget build(BuildContext context) {
     final localPath = photoRef?.localPath?.trim();
     final remoteUrl = photoRef?.remoteUrl?.trim();
+    final expectsImage = photoRef?.hasPhotoRecord ?? false;
     if (localPath != null && localPath.isNotEmpty) {
       return Image.file(
         File(localPath),
         fit: fit,
         alignment: alignment,
-        errorBuilder: (_, _, _) => _remoteOrFallback(remoteUrl),
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          if (wasSynchronouslyLoaded || frame != null) {
+            return child;
+          }
+          return placeholder;
+        },
+        errorBuilder: (_, _, _) => _remoteOrFallback(
+          remoteUrl,
+          expectsImage: expectsImage,
+        ),
       );
     }
 
-    return _remoteOrFallback(remoteUrl);
+    return _remoteOrFallback(remoteUrl, expectsImage: expectsImage);
   }
 
-  Widget _remoteOrFallback(String? remoteUrl) {
+  Widget _remoteOrFallback(String? remoteUrl, {required bool expectsImage}) {
     if (remoteUrl == null || remoteUrl.isEmpty) {
-      return error ?? placeholder;
+      return expectsImage ? placeholder : (error ?? placeholder);
     }
 
     return Image.network(
       remoteUrl,
       fit: fit,
       alignment: alignment,
-      errorBuilder: (_, _, _) => error ?? placeholder,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded || frame != null) {
+          return child;
+        }
+        return placeholder;
+      },
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) {
+          return child;
+        }
+        return placeholder;
+      },
+      errorBuilder: (_, _, _) => expectsImage ? placeholder : (error ?? placeholder),
     );
   }
 }

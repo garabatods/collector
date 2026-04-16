@@ -43,10 +43,12 @@ class ArchivePhotoRef {
   const ArchivePhotoRef({
     this.localPath,
     this.remoteUrl,
+    this.hasPhotoRecord = false,
   });
 
   final String? localPath;
   final String? remoteUrl;
+  final bool hasPhotoRecord;
 
   bool get hasImage =>
       (localPath ?? '').trim().isNotEmpty || (remoteUrl ?? '').trim().isNotEmpty;

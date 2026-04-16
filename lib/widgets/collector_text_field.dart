@@ -278,7 +278,7 @@ class _CollectorSearchFieldState extends State<CollectorSearchField> {
       onTapOutside: (_) => _focusNode?.unfocus(),
       decoration: InputDecoration(
         filled: true,
-        fillColor: widget.fillColor ?? AppColors.surfaceContainerHighest,
+        fillColor: widget.fillColor ?? AppColors.searchFieldFill,
         hintText: widget.hintText,
         hintStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
           color: widget.hintColor ?? AppColors.onSurfaceVariant,

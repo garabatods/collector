@@ -95,20 +95,21 @@ class AddItemAutofillResolver {
     required UserCollectionVocabulary vocabulary,
     required AddItemFormMode formMode,
   }) {
-    final candidates = <String>[
-      if ((_clean(identificationResult.franchise) ?? '').isNotEmpty)
-        _clean(identificationResult.franchise)!,
-      if ((_clean(identificationResult.series) ?? '').isNotEmpty)
-        _clean(identificationResult.series)!,
-      if ((_clean(identificationResult.characterOrSubject) ?? '').isNotEmpty)
-        _clean(identificationResult.characterOrSubject)!,
-      if (formMode == AddItemFormMode.comic &&
-          (_clean(identificationResult.volumeCandidate) ?? '').isNotEmpty)
-        _clean(identificationResult.volumeCandidate)!,
-      if (formMode == AddItemFormMode.comic &&
-          (_clean(identificationResult.publisherCandidate) ?? '').isNotEmpty)
-        _clean(identificationResult.publisherCandidate)!,
-    ];
+    final candidates = formMode == AddItemFormMode.comic
+        ? <String>[
+            if ((_clean(identificationResult.franchise) ?? '').isNotEmpty)
+              _clean(identificationResult.franchise)!,
+            if ((_clean(identificationResult.characterOrSubject) ?? '').isNotEmpty)
+              _clean(identificationResult.characterOrSubject)!,
+          ]
+        : <String>[
+            if ((_clean(identificationResult.franchise) ?? '').isNotEmpty)
+              _clean(identificationResult.franchise)!,
+            if ((_clean(identificationResult.series) ?? '').isNotEmpty)
+              _clean(identificationResult.series)!,
+            if ((_clean(identificationResult.characterOrSubject) ?? '').isNotEmpty)
+              _clean(identificationResult.characterOrSubject)!,
+          ];
 
     final uniqueCandidates = <String>[];
     final seen = <String>{};

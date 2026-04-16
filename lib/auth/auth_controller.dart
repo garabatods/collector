@@ -5,23 +5,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'auth_service.dart';
 
-enum AuthStage {
-  splash,
-  unauthenticated,
-  authenticated,
-}
+enum AuthStage { splash, unauthenticated, authenticated }
 
-enum AuthMode {
-  login,
-  join,
-}
+enum AuthMode { login, join }
 
 class AuthController extends ChangeNotifier {
   AuthController({
     required AuthService authService,
-    Duration splashDelay = const Duration(milliseconds: 2500),
-  })  : _authService = authService,
-        _splashDelay = splashDelay;
+    Duration splashDelay = const Duration(milliseconds: 3000),
+  }) : _authService = authService,
+       _splashDelay = splashDelay;
 
   final AuthService _authService;
   final Duration _splashDelay;
@@ -112,10 +105,7 @@ class AuthController extends ChangeNotifier {
 
     try {
       if (_mode == AuthMode.login) {
-        await _authService.signInWithPassword(
-          email: email,
-          password: password,
-        );
+        await _authService.signInWithPassword(email: email, password: password);
       } else {
         final response = await _authService.signUp(
           email: email,

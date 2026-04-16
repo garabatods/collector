@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/collector_haptics.dart';
 import '../core/data/archive_repository.dart';
 import '../features/collection/data/repositories/collection_vocabulary_repository.dart';
 import '../theme/app_colors.dart';
@@ -54,7 +55,8 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   final _vocabularyRepository = CollectionVocabularyRepository();
   var _selectedTab = _DashboardTab.home;
   var _refreshSeed = 0;
-  var _librarySearchFocusRequest = 0;
+  final _librarySearchFocusRequest = 0;
+  var _librarySelectionMode = false;
 
   @override
   void initState() {
@@ -75,6 +77,9 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   }
 
   void _selectTab(_DashboardTab tab) {
+    if (_selectedTab != tab) {
+      CollectorHaptics.selection();
+    }
     setState(() {
       _selectedTab = tab;
     });
@@ -86,19 +91,13 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     });
   }
 
-  void _openLibrarySearch() {
-    setState(() {
-      _selectedTab = _DashboardTab.library;
-      _librarySearchFocusRequest++;
-    });
-  }
-
   Future<void> _openAddEntrySheet() async {
     final categoryOptions = await _loadAddCategoryOptions();
     if (!mounted) {
       return;
     }
 
+    CollectorHaptics.light();
     await showModalBottomSheet<void>(
       context: context,
       useSafeArea: true,
@@ -215,7 +214,6 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         refreshSeed: _refreshSeed,
         onAddFirstItem: _openManualAddFlow,
         onScanItem: _openScannerFlow,
-        onOpenSearch: _openLibrarySearch,
         onOpenLibrary: () => _selectTab(_DashboardTab.library),
         onOpenProfile: () => _selectTab(_DashboardTab.profile),
       ),
@@ -224,6 +222,14 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         child: CollectionLibraryScreen(
           refreshSeed: _refreshSeed,
           searchFocusRequest: _librarySearchFocusRequest,
+          onSelectionModeChanged: (active) {
+            if (_librarySelectionMode == active) {
+              return;
+            }
+            setState(() {
+              _librarySelectionMode = active;
+            });
+          },
         ),
       ),
       SafeArea(
@@ -273,40 +279,43 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
           ),
         ],
       ),
-      bottomNavigationBar: CollectorBottomBar(
-        items: [
-          CollectorBottomBarItemData(
-            icon: Icons.home_outlined,
-            label: 'Home',
-            active: _selectedTab == _DashboardTab.home,
-            onTap: () => _selectTab(_DashboardTab.home),
-          ),
-          CollectorBottomBarItemData(
-            icon: Icons.grid_view_rounded,
-            label: 'Library',
-            active: _selectedTab == _DashboardTab.library,
-            onTap: () => _selectTab(_DashboardTab.library),
-          ),
-          CollectorBottomBarItemData(
-            icon: Icons.add_rounded,
-            label: 'Add',
-            isCenterAction: true,
-            onTap: _openAddEntrySheet,
-          ),
-          CollectorBottomBarItemData(
-            icon: Icons.favorite_outline_rounded,
-            label: 'Wishlist',
-            active: _selectedTab == _DashboardTab.wishlist,
-            onTap: () => _selectTab(_DashboardTab.wishlist),
-          ),
-          CollectorBottomBarItemData(
-            icon: Icons.person_outline_rounded,
-            label: 'Profile',
-            active: _selectedTab == _DashboardTab.profile,
-            onTap: () => _selectTab(_DashboardTab.profile),
-          ),
-        ],
-      ),
+      bottomNavigationBar:
+          _selectedTab == _DashboardTab.library && _librarySelectionMode
+          ? null
+          : CollectorBottomBar(
+              items: [
+                CollectorBottomBarItemData(
+                  icon: Icons.home_outlined,
+                  label: 'Home',
+                  active: _selectedTab == _DashboardTab.home,
+                  onTap: () => _selectTab(_DashboardTab.home),
+                ),
+                CollectorBottomBarItemData(
+                  icon: Icons.grid_view_rounded,
+                  label: 'Library',
+                  active: _selectedTab == _DashboardTab.library,
+                  onTap: () => _selectTab(_DashboardTab.library),
+                ),
+                CollectorBottomBarItemData(
+                  icon: Icons.add_rounded,
+                  label: 'Add',
+                  isCenterAction: true,
+                  onTap: _openAddEntrySheet,
+                ),
+                CollectorBottomBarItemData(
+                  icon: Icons.favorite_outline_rounded,
+                  label: 'Wishlist',
+                  active: _selectedTab == _DashboardTab.wishlist,
+                  onTap: () => _selectTab(_DashboardTab.wishlist),
+                ),
+                CollectorBottomBarItemData(
+                  icon: Icons.person_outline_rounded,
+                  label: 'Profile',
+                  active: _selectedTab == _DashboardTab.profile,
+                  onTap: () => _selectTab(_DashboardTab.profile),
+                ),
+              ],
+            ),
     );
   }
 }

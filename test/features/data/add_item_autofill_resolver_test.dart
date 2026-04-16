@@ -111,5 +111,28 @@ void main() {
 
       expect(result.formMode, AddItemFormMode.comic);
     });
+
+    test('comic mode does not turn publisher and volume into tags', () {
+      final resolver = AddItemAutofillResolver();
+      final result = resolver.resolveWithVocabulary(
+        identificationResult: const CollectibleIdentificationResult(
+          status: CollectibleIdentificationStatus.matched,
+          providerStage: CollectibleIdentificationProviderStage.comicvine,
+          source: CollectibleIdentificationSource.aiPhoto,
+          title: 'Teenage Mutant Ninja Turtles: The Last Ronin Lost Years',
+          sourceBadge: 'ComicVine',
+          suggestedCategory: 'Comics',
+          franchise: 'Teenage Mutant Ninja Turtles',
+          comicContext: CollectibleIdentificationComicContext(
+            publisher: 'IDW Publishing',
+            volumeName: 'Teenage Mutant Ninja Turtles: The Last Ronin Lost Years',
+            issueNumber: '1',
+          ),
+        ),
+        vocabulary: const UserCollectionVocabulary(),
+      );
+
+      expect(result.newTagNames, ['Teenage Mutant Ninja Turtles']);
+    });
   });
 }

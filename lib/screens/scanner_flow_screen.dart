@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../core/collector_haptics.dart';
+import '../core/collector_sound_effects.dart';
 import '../features/collection/data/models/add_item_autofill_result.dart';
 import '../features/collection/data/models/collectible_identification_result.dart';
 import '../features/collection/data/repositories/collectible_identification_repository.dart';
@@ -100,7 +104,14 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
   List<_MultiScanTrayItem> _multiScanItems = const [];
 
   @override
+  void initState() {
+    super.initState();
+    CollectorSoundEffects.warmUpScan();
+  }
+
+  @override
   void dispose() {
+    unawaited(CollectorSoundEffects.disposeScan());
     _controller.dispose();
     super.dispose();
   }
@@ -120,6 +131,7 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
     }
 
     _isHandlingDetection = true;
+    CollectorSoundEffects.playScan();
 
     try {
       if (_isMultiScanMode) {
@@ -169,6 +181,9 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
             ? 'No barcode match yet. AI Photo ID works better for loose toys, comics, worn packages, and barcode-less pieces.'
             : 'Barcode lookup is unavailable right now. You can still continue manually or use AI Photo ID.';
       });
+      if (lookupResult.hasCatalogMatch) {
+        CollectorHaptics.medium();
+      }
     } on CollectibleIdentificationException catch (error) {
       if (mounted && _detectedBarcode == barcode) {
         setState(() {
@@ -406,6 +421,7 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
   }
 
   Future<void> _toggleMultiScanMode() async {
+    CollectorHaptics.selection();
     if (_isMultiScanMode) {
       if (_multiScanItems.isNotEmpty) {
         setState(() {

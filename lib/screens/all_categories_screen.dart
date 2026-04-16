@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/collector_haptics.dart';
 import '../core/data/archive_repository.dart';
 import '../core/data/archive_types.dart';
 import '../theme/app_colors.dart';
@@ -44,6 +45,7 @@ class _AllCategoriesScreenState extends State<AllCategoriesScreen> {
   }
 
   Future<void> _openCategory(String category) async {
+    CollectorHaptics.light();
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => CategoryCollectionScreen(category: category),

@@ -68,6 +68,8 @@ abstract final class AppColors {
   static const categorySlateBackground = Color(0x1A334155);
   static const categorySlateBorder = Color(0x33CBD5E1);
   static const categorySlateForeground = Color(0xFFE2E8F0);
+  static Color get searchFieldFill =>
+      surfaceContainerHighest.withValues(alpha: 0.78);
 
   static const primaryGradient = LinearGradient(
     begin: Alignment.topLeft,

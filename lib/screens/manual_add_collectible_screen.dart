@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../core/collector_haptics.dart';
 import '../features/collection/data/models/add_item_autofill_result.dart';
 import '../features/collection/data/models/collectible_model.dart';
 import '../features/collection/data/models/collectible_identification_result.dart';
@@ -21,7 +22,7 @@ import '../widgets/collector_snack_bar.dart';
 import '../widgets/collector_sticky_back_button.dart';
 import '../widgets/collector_text_field.dart';
 
-const _formHeaderBottomSpacing = AppSpacing.xl;
+const _formHeaderBottomSpacing = AppSpacing.lg;
 const _formSectionSpacing = 40.0;
 const _formPanelContentSpacing = AppSpacing.md;
 const _visibleSuggestionCount = 5;
@@ -74,14 +75,6 @@ class _ManualAddCollectibleScreenState
     'Other',
   ];
 
-  static const List<String> _conditionOptions = [
-    'Mint',
-    'Excellent',
-    'Good',
-    'Fair',
-    'Poor',
-  ];
-
   static const List<_BoxStatusOption> _boxStatusOptions = [
     _BoxStatusOption(label: 'Sealed', value: 'sealed'),
     _BoxStatusOption(label: 'Boxed', value: 'boxed'),
@@ -103,6 +96,7 @@ class _ManualAddCollectibleScreenState
   final _photosRepository = CollectiblePhotosRepository();
   final _tagsRepository = TagsRepository();
   final _imagePicker = ImagePicker();
+  late final ScrollController _scrollController;
 
   XFile? _selectedImage;
   String? _selectedCategory;
@@ -117,6 +111,8 @@ class _ManualAddCollectibleScreenState
   bool _isGrail = false;
   bool _isDuplicate = false;
   bool _isSaving = false;
+  bool _isDeleting = false;
+  bool _showFloatingSave = true;
   String? _titleError;
   String? _categoryError;
   List<String> _savedCategories = const [];
@@ -129,16 +125,25 @@ class _ManualAddCollectibleScreenState
 
   bool get _isEditing => widget.collectible != null;
   bool get _isComicMode => _formMode == AddItemFormMode.comic;
+  double get _floatingSaveRevealThreshold => _isEditing ? 260 : 132;
+  String get _primaryActionLabel => _isEditing ? 'Save Changes' : 'Add Item';
 
   @override
   void initState() {
     super.initState();
+    _scrollController = ScrollController()..addListener(_handleScroll);
     _formMode = _resolveInitialFormMode();
     _hydrateFromCollectible();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncFloatingSaveVisibility();
+    });
   }
 
   @override
   void dispose() {
+    _scrollController
+      ..removeListener(_handleScroll)
+      ..dispose();
     _titleController.dispose();
     _customCategoryController.dispose();
     _customBrandController.dispose();
@@ -150,6 +155,29 @@ class _ManualAddCollectibleScreenState
     _issueNumberController.dispose();
     _notesController.dispose();
     super.dispose();
+  }
+
+  void _handleScroll() {
+    _syncFloatingSaveVisibility();
+  }
+
+  void _syncFloatingSaveVisibility() {
+    if (!mounted || !_scrollController.hasClients) {
+      return;
+    }
+
+    final position = _scrollController.position;
+    final shouldShow =
+        (position.maxScrollExtent - position.pixels) >
+        _floatingSaveRevealThreshold;
+
+    if (shouldShow == _showFloatingSave) {
+      return;
+    }
+
+    setState(() {
+      _showFloatingSave = shouldShow;
+    });
   }
 
   AddItemFormMode _resolveInitialFormMode() {
@@ -438,6 +466,7 @@ class _ManualAddCollectibleScreenState
 
   void _selectCategory(String category) {
     final trimmedCategory = category.trim();
+    CollectorHaptics.selection();
     setState(() {
       _useCustomCategory = false;
       _selectedCategory = trimmedCategory;
@@ -451,6 +480,7 @@ class _ManualAddCollectibleScreenState
   }
 
   void _selectBrand(String brand) {
+    CollectorHaptics.selection();
     setState(() {
       _useCustomBrand = false;
       _selectedBrand = brand;
@@ -459,29 +489,38 @@ class _ManualAddCollectibleScreenState
   }
 
   void _toggleDetailsExpanded() {
+    CollectorHaptics.selection();
     setState(() {
       _detailsExpanded = !_detailsExpanded;
     });
   }
 
-  void _toggleCollectorState(CollectorState collectorState) {
+  void _toggleFavoriteFlag(bool value) {
+    CollectorHaptics.selection();
     setState(() {
-      switch (collectorState) {
-        case CollectorState.favorite:
-          _isFavorite = !_isFavorite;
-          break;
-        case CollectorState.grail:
-          _isGrail = !_isGrail;
-          break;
-        case CollectorState.duplicate:
-          _isDuplicate = !_isDuplicate;
-          break;
-      }
+      _isFavorite = value;
     });
+  }
+
+  Future<void> _openPhotoSourceSheet() async {
+    CollectorHaptics.light();
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => const _PhotoSourceBottomSheet(),
+    );
+
+    if (!mounted || source == null) {
+      return;
+    }
+
+    await _pickImage(source);
   }
 
   Future<void> _openCategorySelectorSheet() async {
     final latestCategory = (_lastUsedCategory ?? '').trim();
+    CollectorHaptics.light();
     final selected = await showModalBottomSheet<String>(
       context: context,
       useSafeArea: true,
@@ -513,6 +552,7 @@ class _ManualAddCollectibleScreenState
   }
 
   Future<void> _openBrandSelectorSheet() async {
+    CollectorHaptics.light();
     final selected = await showModalBottomSheet<String>(
       context: context,
       useSafeArea: true,
@@ -541,6 +581,7 @@ class _ManualAddCollectibleScreenState
   }
 
   Future<void> _openTagsSelectorSheet() async {
+    CollectorHaptics.light();
     final result = await showModalBottomSheet<_TagPickerSheetResult>(
       context: context,
       useSafeArea: true,
@@ -557,6 +598,7 @@ class _ManualAddCollectibleScreenState
       return;
     }
 
+    CollectorHaptics.selection();
     setState(() {
       _selectedTagIds
         ..clear()
@@ -567,9 +609,19 @@ class _ManualAddCollectibleScreenState
     });
   }
 
-  void _adjustQuantity(int delta) {
+  void _removeSelectedExistingTag(String tagId) {
+    CollectorHaptics.selection();
     setState(() {
-      _quantity = (_quantity + delta).clamp(1, 999);
+      _selectedTagIds.remove(tagId);
+    });
+  }
+
+  void _removeNewTagName(String tagName) {
+    CollectorHaptics.selection();
+    setState(() {
+      _newTagNames.removeWhere(
+        (existing) => existing.toLowerCase() == tagName.toLowerCase(),
+      );
     });
   }
 
@@ -752,17 +804,16 @@ class _ManualAddCollectibleScreenState
   }
 
   bool _hasVisibleMetadata() {
+    if (_isComicMode) {
+      return _descriptionController.text.trim().isNotEmpty ||
+          _releaseYearController.text.trim().isNotEmpty ||
+          _selectedCondition != null ||
+          _isFavorite;
+    }
+
     return _descriptionController.text.trim().isNotEmpty ||
-        _franchiseController.text.trim().isNotEmpty ||
-        _seriesController.text.trim().isNotEmpty ||
-        _characterController.text.trim().isNotEmpty ||
-        _releaseYearController.text.trim().isNotEmpty ||
-        _issueNumberController.text.trim().isNotEmpty ||
-        _isFavorite ||
-        _isGrail ||
-        _isDuplicate ||
-        _selectedCondition != null ||
-        _selectedBoxStatus != null;
+        _selectedBoxStatus != null ||
+        _isFavorite;
   }
 
   String get _screenTitle {
@@ -773,6 +824,10 @@ class _ManualAddCollectibleScreenState
   }
 
   String get _screenDescription {
+    if (_isEditing) {
+      return '';
+    }
+
     return _isComicMode
         ? 'Comic details work a little differently, so we front-load the issue and publisher info.'
         : 'Save the essentials first. Add more only if it helps.';
@@ -793,9 +848,6 @@ class _ManualAddCollectibleScreenState
 
   String get _brandEmptyLabel =>
       _isComicMode ? 'No saved publishers yet' : 'No saved brands yet';
-
-  String get _seriesFieldLabel =>
-      _isComicMode ? 'Series / Volume' : 'Line / Series';
 
   Future<void> _save() async {
     final title = _titleController.text.trim();
@@ -902,6 +954,7 @@ class _ManualAddCollectibleScreenState
         return;
       }
 
+      CollectorHaptics.medium();
       CollectionVocabularyRepository.invalidateCache();
       Navigator.of(context).pop(true);
 
@@ -943,9 +996,89 @@ class _ManualAddCollectibleScreenState
     }
   }
 
+  Future<void> _deleteItem() async {
+    if (!_isEditing || _isSaving || _isDeleting) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: AppColors.surfaceContainerHigh,
+          title: const Text('Delete item?'),
+          content: const Text(
+            'This will remove the collectible and its saved photo from your collection.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    final collectibleId = widget.collectible?.id;
+    if (collectibleId == null) {
+      return;
+    }
+
+    setState(() {
+      _isDeleting = true;
+    });
+
+    try {
+      await _photosRepository.deleteAllForCollectible(collectibleId);
+      await _repository.delete(collectibleId);
+
+      if (!mounted) {
+        return;
+      }
+
+      final messenger = ScaffoldMessenger.of(context);
+      CollectorHaptics.heavy();
+      CollectionVocabularyRepository.invalidateCache();
+      Navigator.of(context).pop(true);
+      CollectorSnackBar.showOn(
+        messenger,
+        message: 'Removed from collection.',
+        tone: CollectorSnackBarTone.success,
+      );
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      CollectorSnackBar.show(
+        context,
+        message: 'Could not remove this item right now.',
+        tone: CollectorSnackBarTone.error,
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDeleting = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final selectedImage = _selectedImage;
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    final bottomScrollPadding = _showFloatingSave ? 156.0 : AppSpacing.xl;
 
     return Scaffold(
       body: Stack(
@@ -963,6 +1096,7 @@ class _ManualAddCollectibleScreenState
           ),
           SafeArea(
             child: CustomScrollView(
+              controller: _scrollController,
               slivers: [
                 SliverToBoxAdapter(
                   child: Padding(
@@ -975,18 +1109,20 @@ class _ManualAddCollectibleScreenState
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const SizedBox(height: 48),
-                        const SizedBox(height: AppSpacing.md),
+                        const SizedBox(height: 44),
+                        const SizedBox(height: AppSpacing.sm),
                         Text(
                           _screenTitle,
                           style: Theme.of(context).textTheme.headlineLarge,
                         ),
-                        const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          _screenDescription,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: AppColors.onSurfaceVariant),
-                        ),
+                        if (_screenDescription.isNotEmpty) ...[
+                          const SizedBox(height: AppSpacing.xs),
+                          Text(
+                            _screenDescription,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(color: AppColors.onSurfaceVariant),
+                          ),
+                        ],
                         if ((widget.scannedBarcode ?? '').isNotEmpty) ...[
                           const SizedBox(height: AppSpacing.md),
                           _ScannedBarcodeBanner(
@@ -998,59 +1134,28 @@ class _ManualAddCollectibleScreenState
                   ),
                 ),
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(
+                  padding: EdgeInsets.fromLTRB(
                     AppSpacing.md,
                     0,
                     AppSpacing.md,
-                    140,
+                    bottomScrollPadding,
                   ),
                   sliver: SliverList(
                     delegate: SliverChildListDelegate([
-                      _SectionPanel(
-                        eyebrow: 'Photo',
-                        title: 'Add a photo',
-                        description: 'Optional, but helpful.',
-                        child: Column(
-                          children: [
-                            _PhotoPreview(
-                              selectedImage: selectedImage,
-                              existingPhotoUrl: widget.existingPhotoUrl,
-                              lookupImageUrl:
-                                  widget.identificationResult?.imageUrl,
-                            ),
-                            const SizedBox(height: AppSpacing.md),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _ActionTileButton(
-                                    icon: Icons.camera_alt_outlined,
-                                    label: 'Take photo',
-                                    onTap: () => _pickImage(ImageSource.camera),
-                                  ),
-                                ),
-                                const SizedBox(width: AppSpacing.md),
-                                Expanded(
-                                  child: _ActionTileButton(
-                                    icon: Icons.photo_library_outlined,
-                                    label: 'Photo library',
-                                    onTap: () =>
-                                        _pickImage(ImageSource.gallery),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
+                      _PhotoSection(
+                        selectedImage: selectedImage,
+                        existingPhotoUrl: widget.existingPhotoUrl,
+                        lookupImageUrl: widget.identificationResult?.imageUrl,
+                        isFavorite: _isFavorite,
+                        onEditPhoto: _openPhotoSourceSheet,
+                        onToggleFavorite: () =>
+                            _toggleFavoriteFlag(!_isFavorite),
                       ),
-                      const SizedBox(height: _formSectionSpacing),
+                      const SizedBox(height: AppSpacing.lg),
                       _SectionPanel(
-                        eyebrow: 'Basics',
-                        title: _isComicMode
-                            ? 'Comic essentials'
-                            : 'Just enough to save it',
-                        description: _isComicMode
-                            ? 'Lead with the issue details, then refine the rest below.'
-                            : 'Save the essentials first. Everything else can wait.',
+                        eyebrow: '',
+                        title: _isComicMode ? 'Comic essentials' : 'Basics',
+                        description: '',
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -1073,23 +1178,175 @@ class _ManualAddCollectibleScreenState
                                 helperText:
                                     'Change this if the item was classified wrong',
                                 errorText: _categoryError,
-                                actionLabel: 'Choose',
+                                actionLabel: _resolvedCategory().trim().isEmpty
+                                    ? 'Choose'
+                                    : 'Change',
                                 onTap: _openCategorySelectorSheet,
                                 isPlaceholder: _resolvedCategory()
                                     .trim()
                                     .isEmpty,
+                                compact: true,
+                                showActionLabel: false,
+                                showHelperWhenSelected: false,
                               ),
                               const SizedBox(height: AppSpacing.md),
                               const _BasicsDivider(),
                               const SizedBox(height: AppSpacing.md),
+                              _SelectionField(
+                                label: _brandFieldLabel,
+                                value: _resolvedBrandDisplayValue(),
+                                helperText: _brandFieldHelperText,
+                                actionLabel: (_resolvedBrand() ?? '')
+                                        .trim()
+                                        .isEmpty
+                                    ? 'Choose'
+                                    : 'Change',
+                                onTap: _openBrandSelectorSheet,
+                                isPlaceholder: (_resolvedBrand() ?? '')
+                                    .trim()
+                                    .isEmpty,
+                                compact: true,
+                                showActionLabel: false,
+                                showHelperWhenSelected: false,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              const _BasicsDivider(),
+                              const SizedBox(height: AppSpacing.md),
+                              _SelectionField(
+                                label: 'Tags',
+                                value: _resolvedTagsDisplayValue,
+                                helperText: _tagsFieldHelperText,
+                                actionLabel: _hasSelectedTags ? 'Edit' : 'Choose',
+                                onTap: _openTagsSelectorSheet,
+                                isPlaceholder: !_hasSelectedTags,
+                                footer: _hasSelectedTags
+                                    ? Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: AppSpacing.sm,
+                                        ),
+                                        child: Wrap(
+                                          spacing: AppSpacing.sm,
+                                          runSpacing: AppSpacing.sm,
+                                          children: [
+                                            for (final tag
+                                                in _selectedExistingTags)
+                                              _EditableTagChip(
+                                                label: tag.name,
+                                                onRemove: () =>
+                                                    _removeSelectedExistingTag(
+                                                      tag.id!,
+                                                    ),
+                                              ),
+                                            for (final tagName in _newTagNames)
+                                              _EditableTagChip(
+                                                label: tagName,
+                                                onRemove: () =>
+                                                    _removeNewTagName(tagName),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                            ] else ...[
+                              _SelectionField(
+                                label: 'Category',
+                                value: _resolvedCategoryDisplayValue(),
+                                helperText: 'Required to save',
+                                errorText: _categoryError,
+                                actionLabel: _resolvedCategory().trim().isEmpty
+                                    ? 'Choose'
+                                    : 'Change',
+                                onTap: _openCategorySelectorSheet,
+                                isPlaceholder: _resolvedCategory()
+                                    .trim()
+                                    .isEmpty,
+                                compact: true,
+                                showActionLabel: false,
+                                showHelperWhenSelected: false,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              const _BasicsDivider(),
+                              const SizedBox(height: AppSpacing.md),
+                              _SelectionField(
+                                label: _brandFieldLabel,
+                                value: _resolvedBrandDisplayValue(),
+                                helperText: _brandFieldHelperText,
+                                actionLabel: (_resolvedBrand() ?? '')
+                                        .trim()
+                                        .isEmpty
+                                    ? 'Choose'
+                                    : 'Change',
+                                onTap: _openBrandSelectorSheet,
+                                isPlaceholder: (_resolvedBrand() ?? '')
+                                    .trim()
+                                    .isEmpty,
+                                compact: true,
+                                showActionLabel: false,
+                                showHelperWhenSelected: false,
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                              const _BasicsDivider(),
+                              const SizedBox(height: AppSpacing.md),
+                              _SelectionField(
+                                label: 'Tags',
+                                value: _resolvedTagsDisplayValue,
+                                helperText: _tagsFieldHelperText,
+                                actionLabel: _hasSelectedTags ? 'Edit' : 'Choose',
+                                onTap: _openTagsSelectorSheet,
+                                isPlaceholder: !_hasSelectedTags,
+                                footer: _hasSelectedTags
+                                    ? Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: AppSpacing.sm,
+                                        ),
+                                        child: Wrap(
+                                          spacing: AppSpacing.sm,
+                                          runSpacing: AppSpacing.sm,
+                                          children: [
+                                            for (final tag
+                                                in _selectedExistingTags)
+                                              _EditableTagChip(
+                                                label: tag.name,
+                                                onRemove: () =>
+                                                    _removeSelectedExistingTag(
+                                                      tag.id!,
+                                                    ),
+                                              ),
+                                            for (final tagName in _newTagNames)
+                                              _EditableTagChip(
+                                                label: tagName,
+                                                onRemove: () =>
+                                                    _removeNewTagName(tagName),
+                                              ),
+                                          ],
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: _formSectionSpacing),
+                      _ExpandableSectionPanel(
+                        eyebrow: '',
+                        title: 'Details',
+                        description: _isComicMode
+                            ? 'A few extra fields when they help.'
+                            : 'Only the details that matter here.',
+                        expanded: _detailsExpanded,
+                        onToggle: _toggleDetailsExpanded,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (_isComicMode) ...[
                               CollectorTextField(
                                 label: 'Series / Volume',
                                 hintText: 'Series or volume title',
                                 controller: _seriesController,
                                 textInputAction: TextInputAction.next,
                               ),
-                              const SizedBox(height: AppSpacing.md),
-                              const _BasicsDivider(),
                               const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
                                 label: 'Issue number',
@@ -1099,32 +1356,6 @@ class _ManualAddCollectibleScreenState
                                 textInputAction: TextInputAction.next,
                               ),
                               const SizedBox(height: AppSpacing.md),
-                              const _BasicsDivider(),
-                              const SizedBox(height: AppSpacing.md),
-                              _SelectionField(
-                                label: _brandFieldLabel,
-                                value: _resolvedBrandDisplayValue(),
-                                helperText: _brandFieldHelperText,
-                                actionLabel: 'Choose',
-                                onTap: _openBrandSelectorSheet,
-                                isPlaceholder: (_resolvedBrand() ?? '')
-                                    .trim()
-                                    .isEmpty,
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              const _BasicsDivider(),
-                              const SizedBox(height: AppSpacing.md),
-                              _SelectionField(
-                                label: 'Tags',
-                                value: _resolvedTagsDisplayValue,
-                                helperText: _tagsFieldHelperText,
-                                actionLabel: 'Browse',
-                                onTap: _openTagsSelectorSheet,
-                                isPlaceholder: !_hasSelectedTags,
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              const _BasicsDivider(),
-                              const SizedBox(height: AppSpacing.md),
                               CollectorTextField(
                                 label: 'Release year',
                                 hintText: 'YYYY',
@@ -1132,168 +1363,18 @@ class _ManualAddCollectibleScreenState
                                 keyboardType: TextInputType.number,
                                 textInputAction: TextInputAction.next,
                               ),
-                            ] else ...[
-                              _SelectionField(
-                                label: 'Category',
-                                value: _resolvedCategoryDisplayValue(),
-                                helperText: 'Required to save',
-                                errorText: _categoryError,
-                                actionLabel: 'Browse',
-                                onTap: _openCategorySelectorSheet,
-                                isPlaceholder: _resolvedCategory()
-                                    .trim()
-                                    .isEmpty,
-                              ),
                               const SizedBox(height: AppSpacing.md),
-                              const _BasicsDivider(),
-                              const SizedBox(height: AppSpacing.md),
-                              _SelectionField(
-                                label: _brandFieldLabel,
-                                value: _resolvedBrandDisplayValue(),
-                                helperText: _brandFieldHelperText,
-                                actionLabel: 'Choose',
-                                onTap: _openBrandSelectorSheet,
-                                isPlaceholder: (_resolvedBrand() ?? '')
-                                    .trim()
-                                    .isEmpty,
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              const _BasicsDivider(),
-                              const SizedBox(height: AppSpacing.md),
-                              _SelectionField(
-                                label: 'Tags',
-                                value: _resolvedTagsDisplayValue,
-                                helperText: _tagsFieldHelperText,
-                                actionLabel: 'Browse',
-                                onTap: _openTagsSelectorSheet,
-                                isPlaceholder: !_hasSelectedTags,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: _formSectionSpacing),
-                      _ExpandableSectionPanel(
-                        eyebrow: 'Details',
-                        title: _isComicMode
-                            ? 'Comic details'
-                            : 'Add a little more',
-                        description: _isComicMode
-                            ? 'Descriptions and condition help once the issue details are in place.'
-                            : 'Use this for franchise, line, character, condition, and notes.',
-                        expanded: _detailsExpanded,
-                        onToggle: _toggleDetailsExpanded,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (_isComicMode) ...[
                               _TextAreaField(
                                 label: 'Description',
                                 hintText: 'Short synopsis or condition notes.',
                                 controller: _descriptionController,
                               ),
                             ] else ...[
-                              CollectorTextField(
-                                label: 'Franchise',
-                                hintText: 'Franchise or theme',
-                                controller: _franchiseController,
-                                textInputAction: TextInputAction.next,
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              CollectorTextField(
-                                label: _seriesFieldLabel,
-                                hintText: 'Product line or wave',
-                                controller: _seriesController,
-                                textInputAction: TextInputAction.next,
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              CollectorTextField(
-                                label: 'Character / Subject',
-                                hintText: 'Character or subject',
-                                controller: _characterController,
-                                textInputAction: TextInputAction.next,
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              CollectorTextField(
-                                label: 'Release year',
-                                hintText: 'YYYY',
-                                controller: _releaseYearController,
-                                keyboardType: TextInputType.number,
-                                textInputAction: TextInputAction.next,
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              _TextAreaField(
-                                label: 'Description',
-                                hintText:
-                                    'Notes about condition, accessories, or packaging.',
-                                controller: _descriptionController,
-                              ),
-                            ],
-                            const SizedBox(height: AppSpacing.lg),
-                            Text(
-                              'COLLECTOR STATUS',
-                              style: Theme.of(context).textTheme.labelSmall,
-                            ),
-                            const SizedBox(height: AppSpacing.xxs),
-                            Text(
-                              'Mark how it fits your shelf.',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: AppColors.onSurfaceVariant),
-                            ),
-                            const SizedBox(height: AppSpacing.sm),
-                            _CollectorStatusPanel(
-                              isFavorite: _isFavorite,
-                              isGrail: _isGrail,
-                              isDuplicate: _isDuplicate,
-                              onToggle: _toggleCollectorState,
-                            ),
-                            const SizedBox(height: AppSpacing.lg),
-                            Text(
-                              'CONDITION',
-                              style: Theme.of(context).textTheme.labelSmall,
-                            ),
-                            const SizedBox(height: AppSpacing.xxs),
-                            Text(
-                              'Choose one condition.',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: AppColors.onSurfaceVariant),
-                            ),
-                            const SizedBox(height: AppSpacing.sm),
-                            Wrap(
-                              spacing: AppSpacing.sm,
-                              runSpacing: AppSpacing.sm,
-                              children: _conditionOptions
-                                  .map(
-                                    (condition) => _SingleSelectChoiceChip(
-                                      label: condition,
-                                      tone: _ChipTone.neutral,
-                                      selected: _selectedCondition == condition,
-                                      onTap: () {
-                                        setState(() {
-                                          _selectedCondition =
-                                              _selectedCondition == condition
-                                              ? null
-                                              : condition;
-                                        });
-                                      },
-                                    ),
-                                  )
-                                  .toList(growable: false),
-                            ),
-                            if (!_isComicMode) ...[
-                              const SizedBox(height: AppSpacing.lg),
                               Text(
                                 'BOX STATUS',
                                 style: Theme.of(context).textTheme.labelSmall,
                               ),
                               const SizedBox(height: AppSpacing.xxs),
-                              Text(
-                                'Choose one box status.',
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(
-                                      color: AppColors.onSurfaceVariant,
-                                    ),
-                              ),
                               const SizedBox(height: AppSpacing.sm),
                               Wrap(
                                 spacing: AppSpacing.sm,
@@ -1309,43 +1390,49 @@ class _ManualAddCollectibleScreenState
                                           setState(() {
                                             _selectedBoxStatus =
                                                 _selectedBoxStatus ==
-                                                    option.value
-                                                ? null
-                                                : option.value;
+                                                        option.value
+                                                    ? null
+                                                    : option.value;
                                           });
                                         },
                                       ),
                                     )
                                     .toList(growable: false),
                               ),
+                              const SizedBox(height: AppSpacing.lg),
+                              _TextAreaField(
+                                label: 'Description',
+                                hintText:
+                                    'Notes about condition, accessories, or packaging.',
+                                controller: _descriptionController,
+                              ),
                             ],
-                            const SizedBox(height: AppSpacing.lg),
-                            _QuantityCard(
-                              quantity: _quantity,
-                              onDecrement: () => _adjustQuantity(-1),
-                              onIncrement: () => _adjustQuantity(1),
-                            ),
-                            const SizedBox(height: AppSpacing.lg),
-                            CollectorTextField(
-                              label: 'Notes',
-                              hintText: _isComicMode
-                                  ? 'Condition, storage, or grading notes.'
-                                  : 'Condition, accessories, or shelf notes.',
-                              controller: _notesController,
-                              textInputAction: TextInputAction.done,
-                            ),
                           ],
                         ),
                       ),
                       const SizedBox(height: _formSectionSpacing),
-                      SizedBox(
-                        width: double.infinity,
-                        child: CollectorButton(
-                          label: _isEditing ? 'Save Changes' : 'Add Item',
-                          onPressed: _save,
+                      AnimatedCrossFade(
+                        duration: const Duration(milliseconds: 220),
+                        firstCurve: Curves.easeInOutCubic,
+                        secondCurve: Curves.easeInOutCubic,
+                        sizeCurve: Curves.easeInOutCubic,
+                        crossFadeState: _showFloatingSave
+                            ? CrossFadeState.showFirst
+                            : CrossFadeState.showSecond,
+                        firstChild: const SizedBox.shrink(),
+                        secondChild: _InlineSaveSection(
+                          label: _primaryActionLabel,
                           isLoading: _isSaving,
+                          onSave: _isDeleting ? null : _save,
                         ),
                       ),
+                      if (_isEditing) ...[
+                        const SizedBox(height: AppSpacing.lg),
+                        _DeleteItemSection(
+                          isDeleting: _isDeleting,
+                          onDelete: _deleteItem,
+                        ),
+                      ],
                     ]),
                   ),
                 ),
@@ -1355,7 +1442,311 @@ class _ManualAddCollectibleScreenState
           CollectorStickyBackButton(
             onPressed: () => Navigator.of(context).pop(),
           ),
+          Positioned(
+            left: AppSpacing.md,
+            right: AppSpacing.md,
+            bottom: 0,
+            child: IgnorePointer(
+              ignoring: !_showFloatingSave,
+              child: AnimatedSlide(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                offset: _showFloatingSave ? Offset.zero : const Offset(0, 1.1),
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  opacity: _showFloatingSave ? 1 : 0,
+                  child: AnimatedPadding(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    padding: EdgeInsets.only(
+                      bottom: keyboardInset > 0
+                          ? keyboardInset + AppSpacing.sm
+                          : AppSpacing.md,
+                    ),
+                    child: SafeArea(
+                      top: false,
+                      child: _FloatingSaveBar(
+                        label: _primaryActionLabel,
+                        isLoading: _isSaving,
+                        onSave: _isDeleting ? null : _save,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _FloatingSaveBar extends StatelessWidget {
+  const _FloatingSaveBar({
+    required this.label,
+    required this.isLoading,
+    required this.onSave,
+  });
+
+  final String label;
+  final bool isLoading;
+  final VoidCallback? onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHigh.withValues(alpha: 0.88),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.22),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.32),
+            blurRadius: 28,
+            offset: const Offset(0, 16),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.sm),
+        child: CollectorButton(
+          label: label,
+          onPressed: onSave,
+          isLoading: isLoading,
+        ),
+      ),
+    );
+  }
+}
+
+class _InlineSaveSection extends StatelessWidget {
+  const _InlineSaveSection({
+    required this.label,
+    required this.isLoading,
+    required this.onSave,
+  });
+
+  final String label;
+  final bool isLoading;
+  final VoidCallback? onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: CollectorButton(
+        label: label,
+        onPressed: onSave,
+        isLoading: isLoading,
+      ),
+    );
+  }
+}
+
+class _DeleteItemSection extends StatelessWidget {
+  const _DeleteItemSection({required this.isDeleting, required this.onDelete});
+
+  final bool isDeleting;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.only(top: AppSpacing.md),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(
+            color: AppColors.outlineVariant.withValues(alpha: 0.22),
+          ),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Delete item',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  'Removes it from your collection.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          TextButton.icon(
+            onPressed: isDeleting ? null : onDelete,
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.error,
+              disabledForegroundColor: AppColors.error.withValues(alpha: 0.44),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.xs,
+              ),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: isDeleting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.delete_outline_rounded, size: 18),
+            label: Text(isDeleting ? 'Deleting...' : 'Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhotoSection extends StatelessWidget {
+  const _PhotoSection({
+    required this.selectedImage,
+    this.existingPhotoUrl,
+    this.lookupImageUrl,
+    required this.isFavorite,
+    required this.onEditPhoto,
+    required this.onToggleFavorite,
+  });
+
+  final XFile? selectedImage;
+  final String? existingPhotoUrl;
+  final String? lookupImageUrl;
+  final bool isFavorite;
+  final VoidCallback onEditPhoto;
+  final VoidCallback onToggleFavorite;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPhoto =
+        selectedImage != null ||
+        (existingPhotoUrl ?? '').trim().isNotEmpty ||
+        (lookupImageUrl ?? '').trim().isNotEmpty;
+
+    return Stack(
+      children: [
+        _PhotoPreview(
+          selectedImage: selectedImage,
+          existingPhotoUrl: existingPhotoUrl,
+          lookupImageUrl: lookupImageUrl,
+          height: 196,
+        ),
+        Positioned(
+          top: AppSpacing.md,
+          right: AppSpacing.md,
+          child: _PhotoOverlayIconButton(
+            icon: isFavorite
+                ? Icons.favorite_rounded
+                : Icons.favorite_border_rounded,
+            foregroundColor: isFavorite
+                ? AppColors.tertiary
+                : AppColors.onSurface,
+            onTap: onToggleFavorite,
+          ),
+        ),
+        Positioned(
+          right: AppSpacing.md,
+          bottom: AppSpacing.md,
+          child: _PhotoOverlayAction(
+            label: hasPhoto ? 'Update photo' : 'Add photo',
+            icon: hasPhoto ? Icons.edit_outlined : Icons.add_a_photo_outlined,
+            onTap: onEditPhoto,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PhotoOverlayIconButton extends StatelessWidget {
+  const _PhotoOverlayIconButton({
+    required this.icon,
+    required this.onTap,
+    required this.foregroundColor,
+  });
+
+  final IconData icon;
+  final Color foregroundColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Ink(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.48),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.12),
+            ),
+          ),
+          child: Icon(icon, size: 20, color: foregroundColor),
+        ),
+      ),
+    );
+  }
+}
+
+class _PhotoOverlayAction extends StatelessWidget {
+  const _PhotoOverlayAction({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: AppRadii.pill,
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.48),
+            borderRadius: AppRadii.pill,
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.12),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: Colors.white),
+              const SizedBox(width: AppSpacing.xs),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1366,11 +1757,13 @@ class _PhotoPreview extends StatelessWidget {
     required this.selectedImage,
     this.existingPhotoUrl,
     this.lookupImageUrl,
+    this.height = 220,
   });
 
   final XFile? selectedImage;
   final String? existingPhotoUrl;
   final String? lookupImageUrl;
+  final double height;
 
   bool _isRemoteUrl(String value) {
     final parsed = Uri.tryParse(value);
@@ -1403,7 +1796,7 @@ class _PhotoPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      height: 220,
+      height: height,
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerHighest.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(28),
@@ -1414,89 +1807,14 @@ class _PhotoPreview extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(28),
         child: selectedImage != null
-            ? Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.file(File(selectedImage!.path), fit: BoxFit.cover),
-                  Align(
-                    alignment: Alignment.bottomLeft,
-                    child: Container(
-                      margin: const EdgeInsets.all(AppSpacing.md),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.48),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        'Photo ready',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelLarge?.copyWith(color: Colors.white),
-                      ),
-                    ),
-                  ),
-                ],
-              )
+            ? Image.file(File(selectedImage!.path), fit: BoxFit.cover)
             : existingPhotoUrl != null
-            ? Stack(
-                fit: StackFit.expand,
-                children: [
-                  _buildExistingPhoto(),
-                  Align(
-                    alignment: Alignment.bottomLeft,
-                    child: Container(
-                      margin: const EdgeInsets.all(AppSpacing.md),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.48),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        'Current photo',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelLarge?.copyWith(color: Colors.white),
-                      ),
-                    ),
-                  ),
-                ],
-              )
+            ? _buildExistingPhoto()
             : lookupImageUrl != null
-            ? Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.network(
-                    lookupImageUrl!,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
-                  ),
-                  Align(
-                    alignment: Alignment.bottomLeft,
-                    child: Container(
-                      margin: const EdgeInsets.all(AppSpacing.md),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.48),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        'Suggested image',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelLarge?.copyWith(color: Colors.white),
-                      ),
-                    ),
-                  ),
-                ],
+            ? Image.network(
+                lookupImageUrl!,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
               )
             : const _PhotoPreviewEmpty(),
       ),
@@ -1535,28 +1853,35 @@ class _SectionPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasEyebrow = eyebrow.trim().isNotEmpty;
+    final hasDescription = description.trim().isNotEmpty;
+
     return CollectorPanel(
       padding: const EdgeInsets.all(AppSpacing.lg),
       backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.94),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            eyebrow.toUpperCase(),
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: AppColors.primary,
-              letterSpacing: 1.1,
+          if (hasEyebrow) ...[
+            Text(
+              eyebrow.toUpperCase(),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: AppColors.primary,
+                letterSpacing: 1.1,
+              ),
             ),
-          ),
-          const SizedBox(height: AppSpacing.sm),
+            const SizedBox(height: AppSpacing.sm),
+          ],
           Text(title, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            description,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
-          ),
+          if (hasDescription) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              description,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.onSurfaceVariant,
+              ),
+            ),
+          ],
           const SizedBox(height: _formPanelContentSpacing),
           child,
         ],
@@ -1584,6 +1909,9 @@ class _ExpandableSectionPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasEyebrow = eyebrow.trim().isNotEmpty;
+    final hasDescription = description.trim().isNotEmpty;
+
     return CollectorPanel(
       padding: const EdgeInsets.all(AppSpacing.lg),
       backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.94),
@@ -1602,25 +1930,29 @@ class _ExpandableSectionPanel extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          eyebrow.toUpperCase(),
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(
-                                color: AppColors.primary,
-                                letterSpacing: 1.1,
-                              ),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
+                        if (hasEyebrow) ...[
+                          Text(
+                            eyebrow.toUpperCase(),
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: AppColors.primary,
+                                  letterSpacing: 1.1,
+                                ),
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                        ],
                         Text(
                           title,
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
-                        const SizedBox(height: AppSpacing.xs),
-                        Text(
-                          description,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: AppColors.onSurfaceVariant),
-                        ),
+                        if (hasDescription) ...[
+                          const SizedBox(height: AppSpacing.xs),
+                          Text(
+                            description,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(color: AppColors.onSurfaceVariant),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -1709,6 +2041,10 @@ class _SelectionField extends StatelessWidget {
     required this.onTap,
     this.errorText,
     this.isPlaceholder = false,
+    this.footer,
+    this.compact = false,
+    this.showActionLabel = true,
+    this.showHelperWhenSelected = true,
   });
 
   final String label;
@@ -1718,9 +2054,18 @@ class _SelectionField extends StatelessWidget {
   final VoidCallback onTap;
   final String? errorText;
   final bool isPlaceholder;
+  final Widget? footer;
+  final bool compact;
+  final bool showActionLabel;
+  final bool showHelperWhenSelected;
 
   @override
   Widget build(BuildContext context) {
+    final showHelper =
+        (errorText ?? '').isNotEmpty ||
+        helperText.trim().isNotEmpty &&
+            (showHelperWhenSelected || isPlaceholder);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1735,7 +2080,10 @@ class _SelectionField extends StatelessWidget {
           onTap: onTap,
           borderRadius: AppRadii.medium,
           child: Ink(
-            padding: const EdgeInsets.all(AppSpacing.md),
+            padding: EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: compact ? AppSpacing.sm : AppSpacing.md,
+            ),
             decoration: BoxDecoration(
               color: AppColors.surfaceContainerHighest.withValues(alpha: 0.4),
               borderRadius: AppRadii.medium,
@@ -1746,6 +2094,7 @@ class _SelectionField extends StatelessWidget {
               ),
             ),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   child: Column(
@@ -1753,38 +2102,147 @@ class _SelectionField extends StatelessWidget {
                     children: [
                       Text(
                         value,
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: (compact
+                                ? Theme.of(context).textTheme.titleMedium
+                                : Theme.of(context).textTheme.titleSmall)
+                            ?.copyWith(
                           color: isPlaceholder
                               ? AppColors.onSurfaceVariant
                               : AppColors.onSurface,
                         ),
                       ),
-                      const SizedBox(height: AppSpacing.xxs),
-                      Text(
-                        errorText ?? helperText,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: (errorText ?? '').isNotEmpty
-                              ? AppColors.error
-                              : AppColors.onSurfaceVariant,
+                      if (showHelper) ...[
+                        const SizedBox(height: AppSpacing.xxs),
+                        Text(
+                          errorText ?? helperText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: (errorText ?? '').isNotEmpty
+                                ? AppColors.error
+                                : AppColors.onSurfaceVariant,
+                          ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ),
                 const SizedBox(width: AppSpacing.sm),
-                TextButton.icon(
-                  onPressed: onTap,
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.primary,
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (showActionLabel) ...[
+                        Text(
+                          actionLabel,
+                          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            color: AppColors.primary,
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.xxs),
+                      ],
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        size: 20,
+                        color: AppColors.primary,
+                      ),
+                    ],
                   ),
-                  icon: const Icon(Icons.search_rounded, size: 16),
-                  label: Text(actionLabel),
                 ),
               ],
             ),
           ),
         ),
+        if (footer != null) ...[footer!],
       ],
+    );
+  }
+}
+
+class _EditableTagChip extends StatelessWidget {
+  const _EditableTagChip({required this.label, required this.onRemove});
+
+  final String label;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxChipWidth = MediaQuery.sizeOf(context).width * 0.72;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onRemove,
+        borderRadius: AppRadii.pill,
+        child: Ink(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxChipWidth),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.primaryContainer.withValues(alpha: 0.16),
+                borderRadius: AppRadii.pill,
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.22),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: AppColors.primary,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  const Icon(
+                    Icons.close_rounded,
+                    size: 14,
+                    color: AppColors.primary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PhotoSourceBottomSheet extends StatelessWidget {
+  const _PhotoSourceBottomSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return _SelectionBottomSheetShell(
+      title: 'Update photo',
+      description: 'Take a fresh photo or choose one from your library.',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _SheetActionRow(
+            label: 'Take photo',
+            icon: Icons.camera_alt_outlined,
+            onTap: () => Navigator.of(context).pop(ImageSource.camera),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          _SheetActionRow(
+            label: 'Photo library',
+            icon: Icons.photo_library_outlined,
+            onTap: () => Navigator.of(context).pop(ImageSource.gallery),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1893,53 +2351,6 @@ class _TextAreaFieldState extends State<_TextAreaField> {
               ),
             ),
           ),
-        ),
-      ],
-    );
-  }
-}
-
-enum CollectorState { favorite, grail, duplicate }
-
-class _CollectorStatusPanel extends StatelessWidget {
-  const _CollectorStatusPanel({
-    required this.isFavorite,
-    required this.isGrail,
-    required this.isDuplicate,
-    required this.onToggle,
-  });
-
-  final bool isFavorite;
-  final bool isGrail;
-  final bool isDuplicate;
-  final ValueChanged<CollectorState> onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: AppSpacing.sm,
-      runSpacing: AppSpacing.sm,
-      children: [
-        _StatusToggleChip(
-          label: 'Favorite',
-          icon: Icons.favorite_rounded,
-          selected: isFavorite,
-          tone: _ChipTone.tag,
-          onTap: () => onToggle(CollectorState.favorite),
-        ),
-        _StatusToggleChip(
-          label: 'Grail',
-          icon: Icons.workspace_premium_rounded,
-          selected: isGrail,
-          tone: _ChipTone.brand,
-          onTap: () => onToggle(CollectorState.grail),
-        ),
-        _StatusToggleChip(
-          label: 'Duplicate',
-          icon: Icons.copy_all_rounded,
-          selected: isDuplicate,
-          tone: _ChipTone.category,
-          onTap: () => onToggle(CollectorState.duplicate),
         ),
       ],
     );
@@ -2545,194 +2956,6 @@ class _BasicsDivider extends StatelessWidget {
       width: double.infinity,
       height: 1,
       color: AppColors.onSurfaceVariant.withValues(alpha: 0.24),
-    );
-  }
-}
-
-class _ActionTileButton extends StatelessWidget {
-  const _ActionTileButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton(
-      onPressed: onTap,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: AppColors.onSurface,
-        side: BorderSide(
-          color: AppColors.outlineVariant.withValues(alpha: 0.28),
-        ),
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md,
-          vertical: AppSpacing.md,
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: AppColors.primary),
-          const SizedBox(height: AppSpacing.xs),
-          Text(label, textAlign: TextAlign.center),
-        ],
-      ),
-    );
-  }
-}
-
-class _StatusToggleChip extends StatelessWidget {
-  const _StatusToggleChip({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.tone,
-    required this.onTap,
-  });
-
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final _ChipTone tone;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = _chipPaletteForTone(tone);
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-          decoration: BoxDecoration(
-            color: selected ? palette.selectedBackground : palette.background,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: selected ? palette.selectedBorder : palette.border,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                size: 16,
-                color: selected
-                    ? palette.selectedForeground
-                    : palette.foreground,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: selected
-                      ? palette.selectedForeground
-                      : palette.foreground,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _QuantityCard extends StatelessWidget {
-  const _QuantityCard({
-    required this.quantity,
-    required this.onDecrement,
-    required this.onIncrement,
-  });
-
-  final int quantity;
-  final VoidCallback onDecrement;
-  final VoidCallback onIncrement;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.45),
-        borderRadius: AppRadii.medium,
-        border: Border.all(
-          color: AppColors.outlineVariant.withValues(alpha: 0.18),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Quantity', style: Theme.of(context).textTheme.titleSmall),
-                const SizedBox(height: AppSpacing.xxs),
-                Text(
-                  'Multiple copies only.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppColors.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _StepperButton(
-            icon: Icons.remove_rounded,
-            onTap: quantity > 1 ? onDecrement : null,
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-            child: Text(
-              '$quantity',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-          ),
-          _StepperButton(icon: Icons.add_rounded, onTap: onIncrement),
-        ],
-      ),
-    );
-  }
-}
-
-class _StepperButton extends StatelessWidget {
-  const _StepperButton({required this.icon, required this.onTap});
-
-  final IconData icon;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: AppColors.outlineVariant.withValues(alpha: 0.2),
-          ),
-        ),
-        child: Icon(
-          icon,
-          color: onTap == null
-              ? AppColors.onSurfaceVariant.withValues(alpha: 0.4)
-              : AppColors.primary,
-        ),
-      ),
     );
   }
 }

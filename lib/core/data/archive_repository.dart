@@ -260,6 +260,7 @@ class ArchiveRepository {
           result[photo.collectibleId] = ArchivePhotoRef(
             localPath: cacheEntry?.localPath,
             remoteUrl: remoteUrl,
+            hasPhotoRecord: true,
           );
         }
         return result;

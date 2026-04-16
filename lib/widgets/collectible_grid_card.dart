@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/collector_haptics.dart';
 import '../core/data/archive_types.dart';
 import '../features/collection/data/models/collectible_model.dart';
 import '../features/collection/data/repositories/collectibles_repository.dart';
@@ -7,6 +8,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import 'archive_photo_view.dart';
 import 'collector_panel.dart';
+import 'collector_skeleton.dart';
 import 'collector_snack_bar.dart';
 import '../screens/collectible_detail_screen.dart';
 
@@ -17,12 +19,20 @@ class CollectibleGridCard extends StatefulWidget {
     required this.photoRef,
     required this.onCollectionChanged,
     this.onCollectibleUpdated,
+    this.selectionMode = false,
+    this.selected = false,
+    this.onSelectionTap,
+    this.onLongPressSelection,
   });
 
   final CollectibleModel collectible;
   final ArchivePhotoRef? photoRef;
   final Future<void> Function() onCollectionChanged;
   final ValueChanged<CollectibleModel>? onCollectibleUpdated;
+  final bool selectionMode;
+  final bool selected;
+  final VoidCallback? onSelectionTap;
+  final VoidCallback? onLongPressSelection;
 
   @override
   State<CollectibleGridCard> createState() => _CollectibleGridCardState();
@@ -50,6 +60,7 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
   }
 
   Future<void> _openDetails() async {
+    CollectorHaptics.light();
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => CollectibleDetailScreen(
@@ -69,6 +80,7 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
       return;
     }
 
+    CollectorHaptics.selection();
     final nextValue = !_isFavorite;
     setState(() {
       _isFavorite = nextValue;
@@ -107,6 +119,8 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
 
   @override
   Widget build(BuildContext context) {
+    final isSelectionMode = widget.selectionMode;
+    final isSelected = widget.selected;
     final photoTags = <Widget>[
       if (widget.collectible.isGrail)
         const _PhotoStatusTag(
@@ -128,125 +142,166 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: _openDetails,
-        child: CollectorPanel(
-          padding: EdgeInsets.zero,
-          backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.94),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 8,
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(16),
-                  ),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      ColoredBox(
-                        color: AppColors.surfaceContainerHighest.withValues(
-                          alpha: 0.72,
-                        ),
-                      ),
-                      ArchivePhotoView(
-                        photoRef: widget.photoRef,
-                        fit: BoxFit.cover,
-                        alignment: Alignment.center,
-                        placeholder: const Center(
-                          child: Icon(
-                            Icons.photo_outlined,
-                            color: AppColors.onSurfaceVariant,
-                            size: 28,
+        onTap: isSelectionMode
+            ? widget.onSelectionTap
+            : _openDetails,
+        onLongPress: widget.onLongPressSelection,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected
+                  ? AppColors.primary.withValues(alpha: 0.5)
+                  : Colors.transparent,
+              width: isSelected ? 1.5 : 1,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: AppColors.primary.withValues(alpha: 0.16),
+                      blurRadius: 18,
+                      offset: const Offset(0, 10),
+                    ),
+                  ]
+                : null,
+          ),
+          child: CollectorPanel(
+            padding: EdgeInsets.zero,
+            backgroundColor: isSelected
+                ? AppColors.primary.withValues(alpha: 0.12)
+                : AppColors.surfaceContainer.withValues(alpha: 0.94),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 8,
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(16),
+                    ),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        ColoredBox(
+                          color: AppColors.surfaceContainerHighest.withValues(
+                            alpha: 0.72,
                           ),
                         ),
-                        error: const Center(
-                          child: Icon(
-                            Icons.broken_image_outlined,
-                            color: AppColors.onSurfaceVariant,
-                            size: 28,
+                        ArchivePhotoView(
+                          photoRef: widget.photoRef,
+                          fit: BoxFit.cover,
+                          alignment: Alignment.center,
+                          placeholder: const CollectorSkeletonBlock(
+                            width: double.infinity,
+                            height: double.infinity,
+                            borderRadius: BorderRadius.zero,
+                          ),
+                          error: const Center(
+                            child: Icon(
+                              Icons.broken_image_outlined,
+                              color: AppColors.onSurfaceVariant,
+                              size: 28,
+                            ),
                           ),
                         ),
-                      ),
-                      Positioned(
-                        top: 5,
-                        right: 5,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: AppColors.background.withValues(alpha: 0.58),
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: AppColors.outlineVariant.withValues(
-                                alpha: 0.2,
+                        if (isSelectionMode)
+                          Positioned.fill(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? AppColors.primary.withValues(alpha: 0.18)
+                                    : AppColors.background.withValues(
+                                        alpha: 0.12,
+                                      ),
                               ),
                             ),
                           ),
-                          child: IconButton(
-                            onPressed: _isUpdatingFavorite
-                                ? null
-                                : _toggleFavorite,
-                            iconSize: 15,
-                            visualDensity: VisualDensity.compact,
-                            padding: const EdgeInsets.all(5),
-                            splashRadius: 16,
-                            color: _isFavorite
-                                ? AppColors.tertiary
-                                : AppColors.onSurface,
-                            icon: Icon(
-                              _isFavorite
-                                  ? Icons.favorite_rounded
-                                  : Icons.favorite_border_rounded,
+                        Positioned(
+                          top: 5,
+                          right: 5,
+                          child: isSelectionMode
+                              ? _SelectionIndicator(selected: isSelected)
+                              : DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: AppColors.background.withValues(
+                                      alpha: 0.58,
+                                    ),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: AppColors.outlineVariant.withValues(
+                                        alpha: 0.2,
+                                      ),
+                                    ),
+                                  ),
+                                  child: IconButton(
+                                    onPressed: _isUpdatingFavorite
+                                        ? null
+                                        : _toggleFavorite,
+                                    iconSize: 15,
+                                    visualDensity: VisualDensity.compact,
+                                    padding: const EdgeInsets.all(5),
+                                    splashRadius: 16,
+                                    color: _isFavorite
+                                        ? AppColors.tertiary
+                                        : AppColors.onSurface,
+                                    icon: Icon(
+                                      _isFavorite
+                                          ? Icons.favorite_rounded
+                                          : Icons.favorite_border_rounded,
+                                    ),
+                                  ),
+                                ),
+                        ),
+                        if (photoTags.isNotEmpty && !isSelectionMode)
+                          Positioned(
+                            left: 5,
+                            bottom: 5,
+                            child: Wrap(
+                              spacing: 4,
+                              runSpacing: 4,
+                              children: photoTags,
                             ),
                           ),
-                        ),
-                      ),
-                      if (photoTags.isNotEmpty)
-                        Positioned(
-                          left: 5,
-                          bottom: 5,
-                          child: Wrap(
-                            spacing: 4,
-                            runSpacing: 4,
-                            children: photoTags,
-                          ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              Expanded(
-                flex: 5,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.collectible.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelLarge?.copyWith(height: 1.1),
-                      ),
-                      const SizedBox(height: AppSpacing.xxs),
-                      Text(
-                        widget.collectible.category.toUpperCase(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: AppColors.onSurfaceVariant.withValues(
-                            alpha: 0.74,
-                          ),
-                          fontSize: 9,
-                          letterSpacing: 0.7,
+                Expanded(
+                  flex: 5,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.collectible.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(
+                            context,
+                          ).textTheme.labelLarge?.copyWith(height: 1.1),
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: AppSpacing.xxs),
+                        Text(
+                          widget.collectible.category.toUpperCase(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: AppColors.onSurfaceVariant.withValues(
+                              alpha: 0.74,
+                            ),
+                            fontSize: 9,
+                            letterSpacing: 0.7,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -261,12 +316,20 @@ class CollectibleListCard extends StatefulWidget {
     required this.photoRef,
     required this.onCollectionChanged,
     this.onCollectibleUpdated,
+    this.selectionMode = false,
+    this.selected = false,
+    this.onSelectionTap,
+    this.onLongPressSelection,
   });
 
   final CollectibleModel collectible;
   final ArchivePhotoRef? photoRef;
   final Future<void> Function() onCollectionChanged;
   final ValueChanged<CollectibleModel>? onCollectibleUpdated;
+  final bool selectionMode;
+  final bool selected;
+  final VoidCallback? onSelectionTap;
+  final VoidCallback? onLongPressSelection;
 
   @override
   State<CollectibleListCard> createState() => _CollectibleListCardState();
@@ -294,6 +357,7 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
   }
 
   Future<void> _openDetails() async {
+    CollectorHaptics.light();
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => CollectibleDetailScreen(
@@ -313,6 +377,7 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
       return;
     }
 
+    CollectorHaptics.selection();
     final nextValue = !_isFavorite;
     setState(() {
       _isFavorite = nextValue;
@@ -351,18 +416,29 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
 
   @override
   Widget build(BuildContext context) {
+    final isSelectionMode = widget.selectionMode;
+    final isSelected = widget.selected;
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: _openDetails,
+        onTap: isSelectionMode
+            ? widget.onSelectionTap
+            : _openDetails,
+        onLongPress: widget.onLongPressSelection,
         borderRadius: BorderRadius.circular(12),
-        child: Ink(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: AppColors.surfaceContainer.withValues(alpha: 0.5),
+            color: isSelected
+                ? AppColors.primary.withValues(alpha: 0.12)
+                : AppColors.surfaceContainer.withValues(alpha: 0.5),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: AppColors.outlineVariant.withValues(alpha: 0.12),
+              color: isSelected
+                  ? AppColors.primary.withValues(alpha: 0.42)
+                  : AppColors.outlineVariant.withValues(alpha: 0.12),
             ),
           ),
           child: Row(
@@ -372,23 +448,36 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
                 child: SizedBox(
                   width: 40,
                   height: 40,
-                  child: ColoredBox(
-                    color: AppColors.surfaceContainerHighest,
-                    child: ArchivePhotoView(
-                      photoRef: widget.photoRef,
-                      fit: BoxFit.cover,
-                      alignment: Alignment.center,
-                      placeholder: const Icon(
-                        Icons.photo_outlined,
-                        color: AppColors.onSurfaceVariant,
-                        size: 20,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ColoredBox(
+                        color: AppColors.surfaceContainerHighest,
+                        child: ArchivePhotoView(
+                          photoRef: widget.photoRef,
+                          fit: BoxFit.cover,
+                          alignment: Alignment.center,
+                          placeholder: const CollectorSkeletonBlock(
+                            width: double.infinity,
+                            height: double.infinity,
+                            borderRadius: BorderRadius.zero,
+                          ),
+                          error: const Icon(
+                            Icons.broken_image_outlined,
+                            color: AppColors.onSurfaceVariant,
+                            size: 20,
+                          ),
+                        ),
                       ),
-                      error: const Icon(
-                        Icons.broken_image_outlined,
-                        color: AppColors.onSurfaceVariant,
-                        size: 20,
-                      ),
-                    ),
+                      if (isSelectionMode)
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? AppColors.primary.withValues(alpha: 0.18)
+                                : AppColors.background.withValues(alpha: 0.1),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -426,30 +515,67 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
                 ),
               ),
               const SizedBox(width: AppSpacing.xs),
-              IconButton(
-                onPressed: _isUpdatingFavorite ? null : _toggleFavorite,
-                iconSize: 18,
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.all(4),
-                constraints: const BoxConstraints.tightFor(
-                  width: 30,
-                  height: 30,
+              if (isSelectionMode)
+                _SelectionIndicator(selected: isSelected)
+              else ...[
+                IconButton(
+                  onPressed: _isUpdatingFavorite ? null : _toggleFavorite,
+                  iconSize: 18,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.all(4),
+                  constraints: const BoxConstraints.tightFor(
+                    width: 30,
+                    height: 30,
+                  ),
+                  color: _isFavorite ? AppColors.tertiary : AppColors.onSurface,
+                  icon: Icon(
+                    _isFavorite
+                        ? Icons.favorite_rounded
+                        : Icons.favorite_border_rounded,
+                  ),
                 ),
-                color: _isFavorite ? AppColors.tertiary : AppColors.onSurface,
-                icon: Icon(
-                  _isFavorite
-                      ? Icons.favorite_rounded
-                      : Icons.favorite_border_rounded,
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  size: 18,
+                  color: AppColors.onSurfaceVariant,
                 ),
-              ),
-              const Icon(
-                Icons.chevron_right_rounded,
-                size: 18,
-                color: AppColors.onSurfaceVariant,
-              ),
+              ],
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SelectionIndicator extends StatelessWidget {
+  const _SelectionIndicator({required this.selected});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(
+        color: selected
+            ? AppColors.primary
+            : AppColors.background.withValues(alpha: 0.36),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: selected
+              ? AppColors.primary
+              : AppColors.outlineVariant.withValues(alpha: 0.4),
+          width: 1.4,
+        ),
+      ),
+      child: Icon(
+        selected ? Icons.check_rounded : Icons.circle_outlined,
+        size: 16,
+        color: selected ? AppColors.onPrimary : AppColors.onSurfaceVariant,
       ),
     );
   }

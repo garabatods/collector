@@ -10,8 +10,8 @@ import '../widgets/category_icon.dart';
 import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collector_button.dart';
-import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
+import '../widgets/collector_skeleton.dart';
 import '../widgets/collector_sticky_back_button.dart';
 import 'ai_photo_identification_screen.dart';
 import 'manual_add_collectible_screen.dart';
@@ -266,7 +266,7 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
                   }
 
                   if (data == null) {
-                    return const CollectorLoadingOverlay();
+                    return const _CategoryCollectionLoadingState();
                   }
 
                   _knownResultCount = data.totalCount;
@@ -1089,6 +1089,82 @@ class _InlineCategoryLoader extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CategoryCollectionLoadingState extends StatelessWidget {
+  const _CategoryCollectionLoadingState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        CustomScrollView(
+          physics: const NeverScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md,
+                  AppSpacing.md,
+                  AppSpacing.md,
+                  AppSpacing.lg,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    SizedBox(height: 48),
+                    SizedBox(height: AppSpacing.lg),
+                    Row(
+                      children: [
+                        CollectorSkeletonBlock(
+                          width: 44,
+                          height: 44,
+                          borderRadius: BorderRadius.all(Radius.circular(12)),
+                        ),
+                        SizedBox(width: AppSpacing.md),
+                        Expanded(
+                          child: CollectorSkeletonBlock(height: 34),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: AppSpacing.lg),
+                    Row(
+                      children: [
+                        Expanded(child: CollectorSkeletonBlock(height: 70)),
+                        SizedBox(width: AppSpacing.sm),
+                        CollectorSkeletonBlock(width: 88, height: 70),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                0,
+                AppSpacing.md,
+                AppSpacing.lg,
+              ),
+              sliver: SliverGrid(
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  return const CollectorGridCardSkeleton();
+                }, childCount: 12),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: AppSpacing.sm,
+                  mainAxisSpacing: AppSpacing.md,
+                  childAspectRatio: 0.72,
+                ),
+              ),
+            ),
+          ],
+        ),
+        CollectorStickyBackButton(onPressed: () => Navigator.of(context).pop()),
+        _CategoryStickyAddButton(onTap: () {}),
+      ],
     );
   }
 }
