@@ -15,18 +15,14 @@ Future<void> main() async {
     );
   }
 
-  runApp(
-    CollectorApp(
-      isSupabaseConfigured: SupabaseConfig.isConfigured,
-    ),
-  );
+  runApp(CollectorApp(isSupabaseConfigured: SupabaseConfig.isConfigured));
 }
 
 class CollectorApp extends StatelessWidget {
   const CollectorApp({
     super.key,
     required this.isSupabaseConfigured,
-    this.splashDelay = const Duration(milliseconds: 2500),
+    this.splashDelay = const Duration(milliseconds: 3000),
   });
 
   final bool isSupabaseConfigured;
@@ -37,7 +33,7 @@ class CollectorApp extends StatelessWidget {
     final baseTheme = AppTheme.dark();
 
     return MaterialApp(
-      title: 'Collector',
+      title: 'Ownzith',
       debugShowCheckedModeBanner: false,
       theme: baseTheme,
       builder: (context, child) {
