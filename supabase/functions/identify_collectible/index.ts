@@ -166,7 +166,7 @@ Deno.serve(async (req) => {
     });
 
     const payload = await req.json();
-    const mode = asString(payload?.mode);
+    const mode = asString(payload?.mode) as LookupMode | null;
     if (mode !== "barcode" && mode !== "photo") {
       return jsonResponse(
         { error: "Expected mode to be either `barcode` or `photo`." },
@@ -183,6 +183,14 @@ Deno.serve(async (req) => {
         );
       }
 
+      const sharedCached = await fetchSharedBarcodeCache({
+        adminClient,
+        barcode,
+      });
+      if (sharedCached) {
+        return jsonResponse(cacheHit(sharedCached), 200);
+      }
+
       const cached = await fetchCache({
         adminClient,
         userId: user.id,
@@ -190,32 +198,53 @@ Deno.serve(async (req) => {
         lookupKey: barcode,
       });
       if (cached) {
+        await saveSharedBarcodeCache({
+          adminClient,
+          barcode,
+          cached,
+        });
         return jsonResponse(cacheHit(cached), 200);
       }
 
       const upcItemDbMatch = await lookupUpcItemDb(barcode);
       if (upcItemDbMatch) {
-        await saveCache({
-          adminClient,
-          userId: user.id,
-          lookupType: "barcode",
-          lookupKey: barcode,
-          ttlDays: 30,
-          match: upcItemDbMatch,
-        });
+        await Promise.all([
+          saveCache({
+            adminClient,
+            userId: user.id,
+            lookupType: "barcode",
+            lookupKey: barcode,
+            ttlDays: 30,
+            match: upcItemDbMatch,
+          }),
+          saveSharedBarcodeMatch({
+            adminClient,
+            barcode,
+            ttlDays: 30,
+            match: upcItemDbMatch,
+          }),
+        ]);
         return jsonResponse(upcItemDbMatch.result, 200);
       }
 
       const goUpcMatch = await lookupGoUpc(barcode);
       if (goUpcMatch) {
-        await saveCache({
-          adminClient,
-          userId: user.id,
-          lookupType: "barcode",
-          lookupKey: barcode,
-          ttlDays: 30,
-          match: goUpcMatch,
-        });
+        await Promise.all([
+          saveCache({
+            adminClient,
+            userId: user.id,
+            lookupType: "barcode",
+            lookupKey: barcode,
+            ttlDays: 30,
+            match: goUpcMatch,
+          }),
+          saveSharedBarcodeMatch({
+            adminClient,
+            barcode,
+            ttlDays: 30,
+            match: goUpcMatch,
+          }),
+        ]);
         return jsonResponse(goUpcMatch.result, 200);
       }
 
@@ -224,22 +253,31 @@ Deno.serve(async (req) => {
         barcode,
         sourceBadge: "No catalog match",
       });
-      await saveCache({
-        adminClient,
-        userId: user.id,
-        lookupType: "barcode",
-        lookupKey: barcode,
-        ttlDays: 30,
-        match: {
-          status: "not_found",
-          providerStage: "goupc",
-          result: miss,
-          rawResult: {
-            upcitemdb: null,
-            goupc: null,
-          },
+      const missMatch: ProviderMatch = {
+        status: "not_found",
+        providerStage: "goupc",
+        result: miss,
+        rawResult: {
+          upcitemdb: null,
+          goupc: null,
         },
-      });
+      };
+      await Promise.all([
+        saveCache({
+          adminClient,
+          userId: user.id,
+          lookupType: "barcode",
+          lookupKey: barcode,
+          ttlDays: 30,
+          match: missMatch,
+        }),
+        saveSharedBarcodeMatch({
+          adminClient,
+          barcode,
+          ttlDays: 30,
+          match: missMatch,
+        }),
+      ]);
       return jsonResponse(miss, 200);
     }
 
@@ -356,6 +394,28 @@ async function fetchCache({
   return data as CacheRow;
 }
 
+async function fetchSharedBarcodeCache({
+  adminClient,
+  barcode,
+}: {
+  adminClient: ReturnType<typeof createClient>;
+  barcode: string;
+}): Promise<CacheRow | null> {
+  const nowIso = new Date().toISOString();
+  const { data, error } = await adminClient
+    .from("barcode_catalog_cache")
+    .select("normalized_result, status, provider_stage, raw_result, expires_at")
+    .eq("barcode", barcode)
+    .gt("expires_at", nowIso)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data as CacheRow;
+}
+
 function cacheHit(cached: CacheRow): JsonMap {
   return {
     ...(cached.normalized_result ?? {}),
@@ -399,6 +459,74 @@ async function saveCache({
 
   if (error) {
     console.error("Could not save identification cache", error);
+  }
+}
+
+async function saveSharedBarcodeMatch({
+  adminClient,
+  barcode,
+  ttlDays,
+  match,
+}: {
+  adminClient: ReturnType<typeof createClient>;
+  barcode: string;
+  ttlDays: number;
+  match: ProviderMatch;
+}) {
+  const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000)
+    .toISOString();
+  await saveSharedBarcodeCacheRow({
+    adminClient,
+    barcode,
+    cached: {
+      normalized_result: match.result,
+      status: match.status,
+      provider_stage: match.providerStage,
+      raw_result: match.rawResult,
+      expires_at: expiresAt,
+    },
+  });
+}
+
+async function saveSharedBarcodeCache({
+  adminClient,
+  barcode,
+  cached,
+}: {
+  adminClient: ReturnType<typeof createClient>;
+  barcode: string;
+  cached: CacheRow;
+}) {
+  await saveSharedBarcodeCacheRow({
+    adminClient,
+    barcode,
+    cached,
+  });
+}
+
+async function saveSharedBarcodeCacheRow({
+  adminClient,
+  barcode,
+  cached,
+}: {
+  adminClient: ReturnType<typeof createClient>;
+  barcode: string;
+  cached: CacheRow;
+}) {
+  const { error } = await adminClient.from("barcode_catalog_cache").upsert(
+    {
+      barcode,
+      status: cached.status,
+      provider_stage: cached.provider_stage,
+      normalized_result: cached.normalized_result,
+      raw_result: cached.raw_result,
+      expires_at: cached.expires_at,
+    },
+    { onConflict: "barcode" },
+  );
+
+  if (error) {
+    console.error("Could not save shared barcode cache", error);
   }
 }
 
