@@ -22,11 +22,13 @@ class CollectionLibraryScreen extends StatefulWidget {
     super.key,
     required this.refreshSeed,
     this.searchFocusRequest = 0,
+    this.selectionDismissRequest = 0,
     this.onSelectionModeChanged,
   });
 
   final int refreshSeed;
   final int searchFocusRequest;
+  final int selectionDismissRequest;
   final ValueChanged<bool>? onSelectionModeChanged;
 
   @override
@@ -54,6 +56,7 @@ class _CollectionLibraryScreenState extends State<CollectionLibraryScreen> {
     return ArchiveBootstrapGate(
       child: _CollectionLibraryLoadedState(
         searchFocusRequest: widget.searchFocusRequest,
+        selectionDismissRequest: widget.selectionDismissRequest,
         onCollectionChanged: _reload,
         onSelectionModeChanged: widget.onSelectionModeChanged,
       ),
@@ -74,11 +77,13 @@ enum _LibraryViewMode { grid, list }
 class _CollectionLibraryLoadedState extends StatefulWidget {
   const _CollectionLibraryLoadedState({
     required this.searchFocusRequest,
+    required this.selectionDismissRequest,
     required this.onCollectionChanged,
     this.onSelectionModeChanged,
   });
 
   final int searchFocusRequest;
+  final int selectionDismissRequest;
   final Future<void> Function() onCollectionChanged;
   final ValueChanged<bool>? onSelectionModeChanged;
 
@@ -144,6 +149,9 @@ class _CollectionLibraryLoadedStateState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.searchFocusRequest != widget.searchFocusRequest) {
       _focusSearchField();
+    }
+    if (oldWidget.selectionDismissRequest != widget.selectionDismissRequest) {
+      _exitSelectionMode();
     }
   }
 
@@ -499,7 +507,9 @@ class _CollectionLibraryLoadedStateState
                     toolbarHeight: _LibraryStickySearchHeader.heightFor(
                       _hasActiveRefinementState,
                     ),
-                    backgroundColor: AppColors.background.withValues(alpha: 0.98),
+                    backgroundColor: AppColors.background.withValues(
+                      alpha: 0.98,
+                    ),
                     surfaceTintColor: Colors.transparent,
                     shadowColor: Colors.black.withValues(alpha: 0.22),
                     elevation: 8,
@@ -507,18 +517,19 @@ class _CollectionLibraryLoadedStateState
                       searchControls: Row(
                         children: [
                           Expanded(
-                                child: CollectorSearchField(
-                                  hintText:
-                                      'Search title, category, brand, series, or tags...',
-                                  fillColor: AppColors.searchFieldFill,
-                                  controller: _searchController,
-                                  focusNode: _searchFocusNode,
+                            child: CollectorSearchField(
+                              hintText:
+                                  'Search title, category, brand, series, or tags...',
+                              fillColor: AppColors.searchFieldFill,
+                              controller: _searchController,
+                              focusNode: _searchFocusNode,
                               readOnly: false,
                               onChanged: (_) {},
                               suffixIcon: _query.isEmpty
                                   ? null
                                   : IconButton(
-                                      onPressed: () => _searchController.clear(),
+                                      onPressed: () =>
+                                          _searchController.clear(),
                                       icon: const Icon(Icons.close_rounded),
                                       color: AppColors.onSurfaceVariant,
                                     ),
@@ -632,7 +643,8 @@ class _CollectionLibraryLoadedStateState
                             photoRef: photoRef,
                             onCollectionChanged: widget.onCollectionChanged,
                             selectionMode: _isSelectionMode,
-                            selected: id != null &&
+                            selected:
+                                id != null &&
                                 _selectedCollectibleIds.contains(id),
                             onSelectionTap: id == null
                                 ? null
@@ -640,8 +652,8 @@ class _CollectionLibraryLoadedStateState
                             onLongPressSelection: id == null
                                 ? null
                                 : () => _isSelectionMode
-                                    ? _toggleSelection(id)
-                                    : _enterSelectionMode(id),
+                                      ? _toggleSelection(id)
+                                      : _enterSelectionMode(id),
                           );
                         }, childCount: data.items.length),
                         gridDelegate:
@@ -677,7 +689,8 @@ class _CollectionLibraryLoadedStateState
                             photoRef: photoRef,
                             onCollectionChanged: widget.onCollectionChanged,
                             selectionMode: _isSelectionMode,
-                            selected: id != null &&
+                            selected:
+                                id != null &&
                                 _selectedCollectibleIds.contains(id),
                             onSelectionTap: id == null
                                 ? null
@@ -685,8 +698,8 @@ class _CollectionLibraryLoadedStateState
                             onLongPressSelection: id == null
                                 ? null
                                 : () => _isSelectionMode
-                                    ? _toggleSelection(id)
-                                    : _enterSelectionMode(id),
+                                      ? _toggleSelection(id)
+                                      : _enterSelectionMode(id),
                           );
                         },
                       ),
@@ -758,7 +771,9 @@ class _LibraryBulkDeleteBar extends StatelessWidget {
                 height: actionSize,
                 decoration: BoxDecoration(
                   color: isDeleting
-                      ? AppColors.surfaceContainerHighest.withValues(alpha: 0.28)
+                      ? AppColors.surfaceContainerHighest.withValues(
+                          alpha: 0.28,
+                        )
                       : AppColors.primary.withValues(alpha: 0.16),
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(

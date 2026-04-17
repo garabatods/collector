@@ -56,6 +56,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   var _selectedTab = _DashboardTab.home;
   var _refreshSeed = 0;
   final _librarySearchFocusRequest = 0;
+  var _librarySelectionDismissRequest = 0;
   var _librarySelectionMode = false;
 
   @override
@@ -89,6 +90,23 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     setState(() {
       _refreshSeed++;
     });
+  }
+
+  void _dismissLibrarySelectionMode() {
+    setState(() {
+      _librarySelectionDismissRequest++;
+    });
+  }
+
+  void _handleRootBackNavigation() {
+    if (_selectedTab == _DashboardTab.library && _librarySelectionMode) {
+      _dismissLibrarySelectionMode();
+      return;
+    }
+
+    if (_selectedTab != _DashboardTab.home) {
+      _selectTab(_DashboardTab.home);
+    }
   }
 
   Future<void> _openAddEntrySheet() async {
@@ -222,6 +240,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         child: CollectionLibraryScreen(
           refreshSeed: _refreshSeed,
           searchFocusRequest: _librarySearchFocusRequest,
+          selectionDismissRequest: _librarySelectionDismissRequest,
           onSelectionModeChanged: (active) {
             if (_librarySelectionMode == active) {
               return;
@@ -250,72 +269,84 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBody: true,
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: const BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment.topCenter,
-                  radius: 1.3,
-                  colors: [AppColors.dashboardGlow, AppColors.background],
+    final canSystemPop =
+        _selectedTab == _DashboardTab.home && !_librarySelectionMode;
+
+    return PopScope<void>(
+      canPop: canSystemPop,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) {
+          return;
+        }
+        _handleRootBackNavigation();
+      },
+      child: Scaffold(
+        extendBody: true,
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment.topCenter,
+                    radius: 1.3,
+                    colors: [AppColors.dashboardGlow, AppColors.background],
+                  ),
                 ),
               ),
             ),
-          ),
-          Positioned.fill(
-            child: IndexedStack(
-              index: _selectedTab.index,
-              children: _buildTabs(),
+            Positioned.fill(
+              child: IndexedStack(
+                index: _selectedTab.index,
+                children: _buildTabs(),
+              ),
             ),
-          ),
-          const Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: SafeArea(bottom: false, child: ArchiveSyncStatusBanner()),
-          ),
-        ],
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(bottom: false, child: ArchiveSyncStatusBanner()),
+            ),
+          ],
+        ),
+        bottomNavigationBar:
+            _selectedTab == _DashboardTab.library && _librarySelectionMode
+            ? null
+            : CollectorBottomBar(
+                items: [
+                  CollectorBottomBarItemData(
+                    icon: Icons.home_outlined,
+                    label: 'Home',
+                    active: _selectedTab == _DashboardTab.home,
+                    onTap: () => _selectTab(_DashboardTab.home),
+                  ),
+                  CollectorBottomBarItemData(
+                    icon: Icons.grid_view_rounded,
+                    label: 'Library',
+                    active: _selectedTab == _DashboardTab.library,
+                    onTap: () => _selectTab(_DashboardTab.library),
+                  ),
+                  CollectorBottomBarItemData(
+                    icon: Icons.add_rounded,
+                    label: 'Add',
+                    isCenterAction: true,
+                    onTap: _openAddEntrySheet,
+                  ),
+                  CollectorBottomBarItemData(
+                    icon: Icons.favorite_outline_rounded,
+                    label: 'Wishlist',
+                    active: _selectedTab == _DashboardTab.wishlist,
+                    onTap: () => _selectTab(_DashboardTab.wishlist),
+                  ),
+                  CollectorBottomBarItemData(
+                    icon: Icons.person_outline_rounded,
+                    label: 'Profile',
+                    active: _selectedTab == _DashboardTab.profile,
+                    onTap: () => _selectTab(_DashboardTab.profile),
+                  ),
+                ],
+              ),
       ),
-      bottomNavigationBar:
-          _selectedTab == _DashboardTab.library && _librarySelectionMode
-          ? null
-          : CollectorBottomBar(
-              items: [
-                CollectorBottomBarItemData(
-                  icon: Icons.home_outlined,
-                  label: 'Home',
-                  active: _selectedTab == _DashboardTab.home,
-                  onTap: () => _selectTab(_DashboardTab.home),
-                ),
-                CollectorBottomBarItemData(
-                  icon: Icons.grid_view_rounded,
-                  label: 'Library',
-                  active: _selectedTab == _DashboardTab.library,
-                  onTap: () => _selectTab(_DashboardTab.library),
-                ),
-                CollectorBottomBarItemData(
-                  icon: Icons.add_rounded,
-                  label: 'Add',
-                  isCenterAction: true,
-                  onTap: _openAddEntrySheet,
-                ),
-                CollectorBottomBarItemData(
-                  icon: Icons.favorite_outline_rounded,
-                  label: 'Wishlist',
-                  active: _selectedTab == _DashboardTab.wishlist,
-                  onTap: () => _selectTab(_DashboardTab.wishlist),
-                ),
-                CollectorBottomBarItemData(
-                  icon: Icons.person_outline_rounded,
-                  label: 'Profile',
-                  active: _selectedTab == _DashboardTab.profile,
-                  onTap: () => _selectTab(_DashboardTab.profile),
-                ),
-              ],
-            ),
     );
   }
 }
