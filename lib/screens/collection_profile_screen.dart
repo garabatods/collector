@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../core/collector_haptics.dart';
 import '../core/data/archive_repository.dart';
 import '../core/data/archive_types.dart';
+import '../core/data/feature_announcement_store.dart';
 import '../features/collection/data/models/collectible_model.dart';
+import '../features/gamification/data/models/collector_badge.dart';
+import '../features/gamification/data/models/collector_level.dart';
+import '../features/gamification/data/services/collector_badge_award_store.dart';
+import '../features/gamification/data/services/collector_badge_engine.dart';
 import '../features/profile/data/models/profile_model.dart';
 import '../features/profile/data/repositories/profile_avatar_repository.dart';
 import '../features/profile/data/repositories/profile_repository.dart';
@@ -11,14 +17,17 @@ import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/archive_photo_view.dart';
+import '../widgets/collector_badge_unlock_sheet.dart';
 import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_chip.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/collector_snack_bar.dart';
+import '../widgets/collector_status_intro_sheet.dart';
 import '../widgets/collector_text_field.dart';
 import '../widgets/resolved_avatar_image.dart';
+import 'all_categories_screen.dart';
 import 'collectible_detail_screen.dart';
 
 class CollectionProfileScreen extends StatefulWidget {
@@ -27,12 +36,18 @@ class CollectionProfileScreen extends StatefulWidget {
     required this.refreshSeed,
     required this.onProfileChanged,
     required this.onAddItem,
+    required this.onOpenRecent,
+    required this.onOpenFavorites,
+    required this.onOpenInsights,
     required this.onSignOut,
   });
 
   final int refreshSeed;
   final VoidCallback onProfileChanged;
   final VoidCallback onAddItem;
+  final VoidCallback onOpenRecent;
+  final VoidCallback onOpenFavorites;
+  final VoidCallback onOpenInsights;
   final Future<void> Function() onSignOut;
 
   @override
@@ -45,9 +60,14 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
   final _profileRepository = ProfileRepository();
   final _profileAvatarRepository = ProfileAvatarRepository();
   final _imagePicker = ImagePicker();
+  final _badgeAwardStore = CollectorBadgeAwardStore.instance;
 
   var _isSigningOut = false;
   var _isUploadingAvatar = false;
+  var _badgeFilter = _BadgeGalleryFilter.unlocked;
+  List<CollectorBadgeAward> _badgeAwards = const [];
+  String? _lastBadgeSignature;
+  var _hasAttemptedCollectorStatusIntro = false;
 
   @override
   void didUpdateWidget(covariant CollectionProfileScreen oldWidget) {
@@ -65,7 +85,7 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
       totalItems: summary.totalItems,
       categoryCount: summary.categoryCount,
       favoriteCount: summary.favoriteCount,
-      wishlistCount: summary.wishlistCount,
+      photoCount: summary.photoCount,
       latestItem: summary.latestItem,
       featuredItem: summary.featuredItem,
       featuredPhotoRef: summary.featuredPhotoRef,
@@ -94,6 +114,45 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
       widget.onProfileChanged();
       await _reload();
     }
+  }
+
+  Future<void> _openAllCategories() async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const AllCategoriesScreen()),
+    );
+
+    if (changed == true) {
+      widget.onProfileChanged();
+      await _reload();
+    }
+  }
+
+  Future<void> _openBadgeDetail(
+    _BadgeGalleryEntry entry,
+    CollectorProgressSnapshot progress,
+  ) async {
+    CollectorHaptics.light();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _BadgeDetailSheet(entry: entry, progress: progress),
+    );
+  }
+
+  Future<void> _openCollectorLevelSheet(int unlockedBadgeCount) async {
+    CollectorHaptics.light();
+    final level = resolveCollectorLevel(
+      unlockedBadgesCount: unlockedBadgeCount,
+      totalBadgesCount: collectorBadgeDefinitions.length,
+    );
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _CollectorLevelSheet(level: level),
+    );
   }
 
   Future<void> _openAvatarPhotoSheet(ProfileModel? profile) async {
@@ -282,6 +341,11 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
             return const CollectorLoadingOverlay();
           }
 
+          _scheduleBadgeSync(snapshot.data!);
+          final badgeProgress = CollectorProgressSnapshot.fromProfileSummary(
+            snapshot.data!,
+          );
+
           return Stack(
             children: [
               CustomScrollView(
@@ -299,6 +363,9 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
                         children: [
                           _ProfileHeader(
                             data: data,
+                            unlockedBadgeCount: _badgeAwards.length,
+                            onLevelTap: () =>
+                                _openCollectorLevelSheet(_badgeAwards.length),
                             onEditProfile: () =>
                                 _openEditProfileSheet(data.profile),
                             onAvatarTap: () =>
@@ -307,6 +374,38 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
                           ),
                           const SizedBox(height: AppSpacing.md),
                           _CollectorSummary(data: data),
+                          const SizedBox(height: AppSpacing.lg),
+                          const _ProfileSectionTitle(
+                            title: 'Quick Access',
+                            subtitle:
+                                'Jump into the parts of your collection you are most likely to revisit.',
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          _QuickAccessSection(
+                            onOpenFavorites: widget.onOpenFavorites,
+                            onOpenRecent: widget.onOpenRecent,
+                            onOpenInsights: widget.onOpenInsights,
+                            onOpenCategories: _openAllCategories,
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          const _ProfileSectionTitle(
+                            title: 'Badges',
+                            subtitle:
+                                'Unlocked and upcoming milestones across your archive.',
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          _BadgesSection(
+                            awards: _badgeAwards,
+                            progress: badgeProgress,
+                            filter: _badgeFilter,
+                            onFilterChanged: (filter) {
+                              setState(() {
+                                _badgeFilter = filter;
+                              });
+                            },
+                            onBadgeTap: (entry) =>
+                                _openBadgeDetail(entry, badgeProgress),
+                          ),
                           const SizedBox(height: AppSpacing.lg),
                           const _ProfileSectionTitle(
                             title: 'Collector Highlight',
@@ -345,17 +444,83 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
       ),
     );
   }
+
+  void _scheduleBadgeSync(ArchiveProfileSummary summary) {
+    final progress = CollectorProgressSnapshot.fromProfileSummary(summary);
+    final signature = CollectorBadgeEngine.buildSignature(progress);
+    if (_lastBadgeSignature == signature) {
+      return;
+    }
+    _lastBadgeSignature = signature;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final unlocked = CollectorBadgeEngine.unlockedBadges(progress);
+      final syncResult = await _badgeAwardStore.syncUnlocked(unlocked);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _badgeAwards = syncResult.awards;
+      });
+      if (syncResult.newAwards.isNotEmpty) {
+        CollectorHaptics.medium();
+        await showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) =>
+              CollectorBadgeUnlockSheet(awards: syncResult.newAwards),
+        );
+        return;
+      }
+
+      await _maybeShowCollectorStatusIntro(summary);
+    });
+  }
+
+  Future<void> _maybeShowCollectorStatusIntro(
+    ArchiveProfileSummary summary,
+  ) async {
+    if (_hasAttemptedCollectorStatusIntro || summary.totalItems <= 0) {
+      return;
+    }
+
+    final dismissed =
+        await FeatureAnnouncementStore.isCollectorStatusIntroDismissed();
+    if (!mounted) {
+      return;
+    }
+
+    _hasAttemptedCollectorStatusIntro = true;
+    if (dismissed) {
+      return;
+    }
+
+    CollectorHaptics.light();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => const CollectorStatusIntroSheet(),
+    );
+
+    await FeatureAnnouncementStore.dismissCollectorStatusIntro();
+  }
 }
 
 class _ProfileHeader extends StatelessWidget {
   const _ProfileHeader({
     required this.data,
+    required this.unlockedBadgeCount,
+    required this.onLevelTap,
     required this.onEditProfile,
     required this.onAvatarTap,
     required this.isUploadingAvatar,
   });
 
   final _ProfileScreenData data;
+  final int unlockedBadgeCount;
+  final VoidCallback onLevelTap;
   final VoidCallback onEditProfile;
   final VoidCallback onAvatarTap;
   final bool isUploadingAvatar;
@@ -368,6 +533,10 @@ class _ProfileHeader extends StatelessWidget {
         ? '@$username'
         : data.email ?? 'Collector archive';
     final bio = data.bio;
+    final collectorLevel = resolveCollectorLevel(
+      unlockedBadgesCount: unlockedBadgeCount,
+      totalBadgesCount: collectorBadgeDefinitions.length,
+    );
 
     return CollectorPanel(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -421,15 +590,202 @@ class _ProfileHeader extends StatelessWidget {
                   : AppColors.onSurface,
             ),
           ),
-          if (data.profile?.createdAt != null) ...[
-            const SizedBox(height: AppSpacing.md),
-            CollectorChip(
-              label:
-                  'Member since ${_formatMemberSince(data.profile!.createdAt!)}',
+          const SizedBox(height: AppSpacing.md),
+          Center(
+            child: _CollectorLevelPill(
+              level: collectorLevel,
+              onTap: onLevelTap,
             ),
-          ],
+          ),
         ],
       ),
+    );
+  }
+}
+
+class _CollectorLevelPill extends StatelessWidget {
+  const _CollectorLevelPill({required this.level, required this.onTap});
+
+  final CollectorLevel level;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color(0x33F0C977),
+                AppColors.surfaceContainerHighest.withValues(alpha: 0.9),
+              ],
+            ),
+            border: Border.all(color: const Color(0x4DBA9150)),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x14533D16),
+                blurRadius: 18,
+                spreadRadius: 0.5,
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Image.asset(
+                level.assetPath,
+                width: 44,
+                height: 44,
+                fit: BoxFit.contain,
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Flexible(
+                child: Text(
+                  level.label,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: AppColors.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CollectorLevelSheet extends StatelessWidget {
+  const _CollectorLevelSheet({required this.level});
+
+  final CollectorLevel level;
+
+  @override
+  Widget build(BuildContext context) {
+    final nextLevel = nextCollectorLevelDefinition(level);
+    final badgesNeeded = nextLevel == null
+        ? 0
+        : (nextLevel.minBadges - level.unlockedBadgesCount).clamp(0, 999);
+
+    return CollectorBottomSheet(
+      title: level.label,
+      description: level.description,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: _CollectorLevelPill(level: level, onTap: () {}),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          _LevelInfoRow(
+            label: 'Badges unlocked',
+            value: '${level.unlockedBadgesCount} of ${level.totalBadgesCount}',
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _LevelInfoRow(label: 'Current standing', value: level.title),
+          const SizedBox(height: AppSpacing.md),
+          if (nextLevel != null)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(AppSpacing.md),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerHighest.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: AppColors.outlineVariant.withValues(alpha: 0.16),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Next Level',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelLarge?.copyWith(color: AppColors.primary),
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    'Level ${nextLevel.level} · ${nextLevel.title}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    badgesNeeded == 1
+                        ? 'Earn 1 more badge to reach the next level.'
+                        : 'Earn $badgesNeeded more badges to reach the next level.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.onSurfaceVariant,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(AppSpacing.md),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerHighest.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: AppColors.outlineVariant.withValues(alpha: 0.16),
+                ),
+              ),
+              child: Text(
+                'You have reached the highest current collector level.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                  height: 1.4,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LevelInfoRow extends StatelessWidget {
+  const _LevelInfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.md),
+        Text(
+          value,
+          style: Theme.of(
+            context,
+          ).textTheme.labelLarge?.copyWith(color: AppColors.onSurface),
+        ),
+      ],
     );
   }
 }
@@ -445,7 +801,7 @@ class _CollectorSummary extends StatelessWidget {
       _SummaryStat(label: 'Items', value: '${data.totalItems}'),
       _SummaryStat(label: 'Categories', value: '${data.categoryCount}'),
       _SummaryStat(label: 'Favorites', value: '${data.favoriteCount}'),
-      _SummaryStat(label: 'Wishlist', value: '${data.wishlistCount}'),
+      _SummaryStat(label: 'Photos', value: '${data.photoCount}'),
     ];
 
     return CollectorPanel(
@@ -497,6 +853,154 @@ class _CollectorSummary extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _QuickAccessSection extends StatelessWidget {
+  const _QuickAccessSection({
+    required this.onOpenFavorites,
+    required this.onOpenRecent,
+    required this.onOpenInsights,
+    required this.onOpenCategories,
+  });
+
+  final VoidCallback onOpenFavorites;
+  final VoidCallback onOpenRecent;
+  final VoidCallback onOpenInsights;
+  final VoidCallback onOpenCategories;
+
+  @override
+  Widget build(BuildContext context) {
+    return CollectorPanel(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.9),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final cellWidth = (constraints.maxWidth - AppSpacing.sm) / 2;
+          final actions = [
+            _ProfileQuickAction(
+              title: 'Favorites',
+              subtitle: 'Your starred pieces',
+              icon: Icons.favorite_outline_rounded,
+              onTap: onOpenFavorites,
+            ),
+            _ProfileQuickAction(
+              title: 'Recently Added',
+              subtitle: 'Latest arrivals',
+              icon: Icons.history_rounded,
+              onTap: onOpenRecent,
+            ),
+            _ProfileQuickAction(
+              title: 'Insights',
+              subtitle: 'Collection signals',
+              icon: Icons.insights_rounded,
+              onTap: onOpenInsights,
+            ),
+            _ProfileQuickAction(
+              title: 'Categories',
+              subtitle: 'Browse every shelf',
+              icon: Icons.grid_view_rounded,
+              onTap: onOpenCategories,
+            ),
+          ];
+
+          return Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.sm,
+            children: [
+              for (final action in actions)
+                SizedBox(
+                  width: cellWidth,
+                  child: _QuickAccessTile(action: action),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _BadgesSection extends StatelessWidget {
+  const _BadgesSection({
+    required this.awards,
+    required this.progress,
+    required this.filter,
+    required this.onFilterChanged,
+    required this.onBadgeTap,
+  });
+
+  final List<CollectorBadgeAward> awards;
+  final CollectorProgressSnapshot progress;
+  final _BadgeGalleryFilter filter;
+  final ValueChanged<_BadgeGalleryFilter> onFilterChanged;
+  final ValueChanged<_BadgeGalleryEntry> onBadgeTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final awardsById = {for (final award in awards) award.badge.id: award};
+    final entries =
+        [
+          for (final badge in collectorBadgeDefinitions)
+            _BadgeGalleryEntry(
+              badge: badge,
+              award: awardsById[badge.id],
+              progress: _badgeUnlockStatus(badge.id, progress),
+            ),
+        ]..sort((a, b) {
+          if (a.isUnlocked == b.isUnlocked) {
+            return a.badge.id.index.compareTo(b.badge.id.index);
+          }
+          return a.isUnlocked ? -1 : 1;
+        });
+    final visibleEntries = entries
+        .where(
+          (entry) => switch (filter) {
+            _BadgeGalleryFilter.unlocked => entry.isUnlocked,
+            _BadgeGalleryFilter.locked => !entry.isUnlocked,
+          },
+        )
+        .toList(growable: false);
+
+    return CollectorPanel(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.9),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _BadgeFilterToggle(
+            filter: filter,
+            unlockedCount: entries.where((entry) => entry.isUnlocked).length,
+            lockedCount: entries.where((entry) => !entry.isUnlocked).length,
+            onChanged: onFilterChanged,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          if (visibleEntries.isEmpty)
+            _BadgeGalleryEmptyState(filter: filter)
+          else
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final cellWidth =
+                    (constraints.maxWidth - (AppSpacing.sm * 2)) / 3;
+                return Wrap(
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.sm,
+                  children: [
+                    for (final entry in visibleEntries)
+                      SizedBox(
+                        width: cellWidth,
+                        child: _BadgeCard(
+                          entry: entry,
+                          onTap: () => onBadgeTap(entry),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+        ],
       ),
     );
   }
@@ -722,22 +1226,9 @@ class _AccountSection extends StatelessWidget {
               ),
               const _AccountDivider(),
               const _AccountRow(
-                icon: Icons.notifications_none_rounded,
-                title: 'Notifications',
-                subtitle: 'Collector alerts are planned next.',
-              ),
-              const _AccountDivider(),
-              const _AccountRow(
-                icon: Icons.palette_outlined,
-                title: 'Appearance',
-                subtitle:
-                    'The app is currently using the collector dark theme.',
-              ),
-              const _AccountDivider(),
-              const _AccountRow(
                 icon: Icons.help_outline_rounded,
                 title: 'Help and Support',
-                subtitle: 'Support links and collector help are coming soon.',
+                subtitle: 'Collector help and support resources.',
               ),
             ],
           ),
@@ -1053,6 +1544,734 @@ class _AvatarPhotoOption extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum _BadgeGalleryFilter { unlocked, locked }
+
+class _BadgeFilterToggle extends StatelessWidget {
+  const _BadgeFilterToggle({
+    required this.filter,
+    required this.unlockedCount,
+    required this.lockedCount,
+    required this.onChanged,
+  });
+
+  final _BadgeGalleryFilter filter;
+  final int unlockedCount;
+  final int lockedCount;
+  final ValueChanged<_BadgeGalleryFilter> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.32),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.16),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _BadgeFilterChip(
+              label: 'Unlocked',
+              count: unlockedCount,
+              selected: filter == _BadgeGalleryFilter.unlocked,
+              onTap: () => onChanged(_BadgeGalleryFilter.unlocked),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: _BadgeFilterChip(
+              label: 'Locked',
+              count: lockedCount,
+              selected: filter == _BadgeGalleryFilter.locked,
+              onTap: () => onChanged(_BadgeGalleryFilter.locked),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BadgeFilterChip extends StatelessWidget {
+  const _BadgeFilterChip({
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.12)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.22)
+                  : Colors.transparent,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: selected
+                      ? AppColors.primary
+                      : AppColors.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Text(
+                '$count',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: selected
+                      ? AppColors.primary
+                      : AppColors.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BadgeGalleryEmptyState extends StatelessWidget {
+  const _BadgeGalleryEmptyState({required this.filter});
+
+  final _BadgeGalleryFilter filter;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = switch (filter) {
+      _BadgeGalleryFilter.unlocked => 'You have not unlocked any badges yet.',
+      _BadgeGalleryFilter.locked => 'You have unlocked every current badge.',
+    };
+    final subtitle = switch (filter) {
+      _BadgeGalleryFilter.unlocked =>
+        'Keep adding to your archive and your first milestones will show up here.',
+      _BadgeGalleryFilter.locked =>
+        'Your shelf has cleared the current badge set. More milestones can be added later.',
+    };
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.12),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            subtitle,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: AppColors.onSurfaceVariant,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileQuickAction {
+  const _ProfileQuickAction({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final VoidCallback onTap;
+}
+
+class _BadgeCard extends StatelessWidget {
+  const _BadgeCard({required this.entry, required this.onTap});
+
+  final _BadgeGalleryEntry entry;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = entry.badge;
+    final isUnlocked = entry.isUnlocked;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xxs,
+            vertical: AppSpacing.xs,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Opacity(
+                      opacity: isUnlocked ? 1 : 0.32,
+                      child: SizedBox(
+                        width: 84,
+                        height: 84,
+                        child: ColorFiltered(
+                          colorFilter: isUnlocked
+                              ? const ColorFilter.mode(
+                                  Colors.transparent,
+                                  BlendMode.dst,
+                                )
+                              : const ColorFilter.matrix(<double>[
+                                  0.2126,
+                                  0.7152,
+                                  0.0722,
+                                  0,
+                                  0,
+                                  0.2126,
+                                  0.7152,
+                                  0.0722,
+                                  0,
+                                  0,
+                                  0.2126,
+                                  0.7152,
+                                  0.0722,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  1,
+                                  0,
+                                ]),
+                          child: Image.asset(
+                            badge.assetPath,
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (!isUnlocked)
+                      Positioned(
+                        top: 2,
+                        right: 0,
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceContainerHighest,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: AppColors.outlineVariant.withValues(
+                                alpha: 0.18,
+                              ),
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.lock_rounded,
+                            size: 12,
+                            color: AppColors.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  badge.title,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: isUnlocked
+                        ? AppColors.onSurface
+                        : AppColors.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                    height: 1.2,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BadgeDetailSheet extends StatelessWidget {
+  const _BadgeDetailSheet({required this.entry, required this.progress});
+
+  final _BadgeGalleryEntry entry;
+  final CollectorProgressSnapshot progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final badge = entry.badge;
+    final mediaQuery = MediaQuery.of(context);
+    final unlock = entry.progress;
+    final isUnlocked = entry.isUnlocked;
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      padding: EdgeInsets.only(bottom: mediaQuery.viewInsets.bottom),
+      child: Container(
+        constraints: BoxConstraints(maxHeight: mediaQuery.size.height * 0.84),
+        decoration: const BoxDecoration(
+          color: AppColors.surfaceContainerHigh,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.md,
+              AppSpacing.lg,
+              AppSpacing.xl,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 36,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 44,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: AppColors.outlineVariant.withValues(
+                              alpha: 0.6,
+                            ),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 0,
+                        right: 0,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => Navigator.of(context).pop(),
+                            borderRadius: BorderRadius.circular(12),
+                            child: Ink(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: AppColors.surfaceContainerHighest
+                                    .withValues(alpha: 0.38),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: AppColors.outlineVariant.withValues(
+                                    alpha: 0.18,
+                                  ),
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.close_rounded,
+                                color: AppColors.onSurfaceVariant,
+                                size: 19,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Container(
+                  width: 168,
+                  height: 168,
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        badge.accentColor.withValues(alpha: 0.18),
+                        badge.accentColor.withValues(alpha: 0.07),
+                        Colors.transparent,
+                      ],
+                    ),
+                    border: Border.all(
+                      color: badge.accentColor.withValues(alpha: 0.16),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: badge.accentColor.withValues(alpha: 0.14),
+                        blurRadius: 30,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: Opacity(
+                    opacity: isUnlocked ? 1 : 0.32,
+                    child: ColorFiltered(
+                      colorFilter: isUnlocked
+                          ? const ColorFilter.mode(
+                              Colors.transparent,
+                              BlendMode.dst,
+                            )
+                          : const ColorFilter.matrix(<double>[
+                              0.2126,
+                              0.7152,
+                              0.0722,
+                              0,
+                              0,
+                              0.2126,
+                              0.7152,
+                              0.0722,
+                              0,
+                              0,
+                              0.2126,
+                              0.7152,
+                              0.0722,
+                              0,
+                              0,
+                              0,
+                              0,
+                              0,
+                              1,
+                              0,
+                            ]),
+                      child: Image.asset(badge.assetPath, fit: BoxFit.contain),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                Text(
+                  badge.title,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    color: AppColors.onSurface,
+                    height: 1.05,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 280),
+                  child: Column(
+                    children: [
+                      Text(
+                        isUnlocked ? badge.description : unlock.requirement,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: AppColors.onSurfaceVariant,
+                          height: 1.45,
+                        ),
+                      ),
+                      if (!isUnlocked && unlock.progressValue != null) ...[
+                        const SizedBox(height: AppSpacing.md),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(999),
+                                child: LinearProgressIndicator(
+                                  value: unlock.progressValue,
+                                  minHeight: 8,
+                                  backgroundColor: badge.accentColor.withValues(
+                                    alpha: 0.16,
+                                  ),
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    badge.accentColor,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (unlock.progressLabel != null) ...[
+                              const SizedBox(width: AppSpacing.sm),
+                              Text(
+                                unlock.progressLabel!,
+                                style: Theme.of(context).textTheme.labelMedium
+                                    ?.copyWith(
+                                      color: badge.accentColor,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.md,
+                            vertical: AppSpacing.sm,
+                          ),
+                          decoration: BoxDecoration(
+                            color: badge.accentColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                              color: badge.accentColor.withValues(alpha: 0.18),
+                            ),
+                          ),
+                          child: Text(
+                            'Locked',
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(color: badge.accentColor),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BadgeGalleryEntry {
+  const _BadgeGalleryEntry({
+    required this.badge,
+    required this.award,
+    required this.progress,
+  });
+
+  final CollectorBadgeDefinition badge;
+  final CollectorBadgeAward? award;
+  final _BadgeUnlockProgress progress;
+
+  bool get isUnlocked => award != null;
+}
+
+class _BadgeUnlockProgress {
+  const _BadgeUnlockProgress({
+    required this.requirement,
+    this.progressValue,
+    this.progressLabel,
+  });
+
+  final String requirement;
+  final double? progressValue;
+  final String? progressLabel;
+}
+
+_BadgeUnlockProgress _badgeUnlockStatus(
+  CollectorBadgeId id,
+  CollectorProgressSnapshot progress,
+) {
+  switch (id) {
+    case CollectorBadgeId.firstShelf:
+      return _countBadgeProgress(
+        requirement: 'Add your first collectible to the archive.',
+        current: progress.totalItems,
+        target: 1,
+      );
+    case CollectorBadgeId.archiveStarter:
+      return _countBadgeProgress(
+        requirement: 'Reach 10 items in the archive.',
+        current: progress.totalItems,
+        target: 10,
+      );
+    case CollectorBadgeId.shelfExpander:
+      return _countBadgeProgress(
+        requirement: 'Reach 25 items in the archive.',
+        current: progress.totalItems,
+        target: 25,
+      );
+    case CollectorBadgeId.deepArchive:
+      return _countBadgeProgress(
+        requirement: 'Reach 50 items in the archive.',
+        current: progress.totalItems,
+        target: 50,
+      );
+    case CollectorBadgeId.centuryShelf:
+      return _countBadgeProgress(
+        requirement: 'Reach 100 items in the archive.',
+        current: progress.totalItems,
+        target: 100,
+      );
+    case CollectorBadgeId.photoReady:
+      return _ratioBadgeProgress(
+        requirement: 'Reach at least 70% photo coverage with 5 or more items.',
+        currentPercent: (progress.photoCoverageRatio * 100).round(),
+        targetPercent: 70,
+      );
+    case CollectorBadgeId.photoKeeper:
+      return _ratioBadgeProgress(
+        requirement: 'Reach 90% photo coverage with 10 or more items.',
+        currentPercent: (progress.photoCoverageRatio * 100).round(),
+        targetPercent: 90,
+      );
+    case CollectorBadgeId.fullyFramed:
+      return _countBadgeProgress(
+        requirement: 'Add a photo for every item in the archive.',
+        current: progress.photoCount,
+        target: progress.totalItems == 0 ? 1 : progress.totalItems,
+      );
+    case CollectorBadgeId.favoriteFinder:
+      return _countBadgeProgress(
+        requirement: 'Mark your first favorite collectible.',
+        current: progress.favoriteCount,
+        target: 1,
+      );
+    case CollectorBadgeId.curatedEye:
+      return _countBadgeProgress(
+        requirement: 'Mark 10 collectibles as favorites.',
+        current: progress.favoriteCount,
+        target: 10,
+      );
+    case CollectorBadgeId.categoryBuilder:
+      return _countBadgeProgress(
+        requirement: 'Collect across 4 different categories.',
+        current: progress.categoryCount,
+        target: 4,
+      );
+    case CollectorBadgeId.focusedCollector:
+      return _countBadgeProgress(
+        requirement: 'Build one category to 10 items.',
+        current: progress.topCategoryItemCount,
+        target: 10,
+      );
+    case CollectorBadgeId.universeBuilder:
+      return _countBadgeProgress(
+        requirement: 'Build one franchise to 10 items.',
+        current: progress.topFranchiseItemCount,
+        target: 10,
+      );
+  }
+}
+
+_BadgeUnlockProgress _countBadgeProgress({
+  required String requirement,
+  required int current,
+  required int target,
+}) {
+  final safeTarget = target <= 0 ? 1 : target;
+  return _BadgeUnlockProgress(
+    requirement: requirement,
+    progressValue: (current / safeTarget).clamp(0, 1),
+    progressLabel: '${current.clamp(0, safeTarget)} / $safeTarget',
+  );
+}
+
+_BadgeUnlockProgress _ratioBadgeProgress({
+  required String requirement,
+  required int currentPercent,
+  required int targetPercent,
+}) {
+  final clamped = currentPercent.clamp(0, 100);
+  return _BadgeUnlockProgress(
+    requirement: requirement,
+    progressValue: (clamped / targetPercent).clamp(0, 1),
+    progressLabel: '$clamped% / $targetPercent%',
+  );
+}
+
+class _QuickAccessTile extends StatelessWidget {
+  const _QuickAccessTile({required this.action});
+
+  final _ProfileQuickAction action;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: action.onTap,
+        borderRadius: BorderRadius.circular(22),
+        child: Ink(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceContainerHighest.withValues(alpha: 0.42),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: AppColors.outlineVariant.withValues(alpha: 0.16),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(
+                      action.icon,
+                      size: 18,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const Spacer(),
+                  const Icon(
+                    Icons.arrow_forward_rounded,
+                    color: AppColors.onSurfaceVariant,
+                    size: 18,
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Text(
+                action.title,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                action.subtitle,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -1383,7 +2602,7 @@ class _ProfileScreenData {
     required this.totalItems,
     required this.categoryCount,
     required this.favoriteCount,
-    required this.wishlistCount,
+    required this.photoCount,
     required this.latestItem,
     required this.featuredItem,
     required this.featuredPhotoRef,
@@ -1396,7 +2615,7 @@ class _ProfileScreenData {
   final int totalItems;
   final int categoryCount;
   final int favoriteCount;
-  final int wishlistCount;
+  final int photoCount;
   final CollectibleModel? latestItem;
   final CollectibleModel? featuredItem;
   final ArchivePhotoRef? featuredPhotoRef;
@@ -1441,22 +2660,4 @@ String _profileInitials(String displayName, String? email) {
   }
 
   return parts.map((part) => part.characters.first.toUpperCase()).join();
-}
-
-String _formatMemberSince(DateTime date) {
-  const months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-  return '${months[date.month - 1]} ${date.year}';
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/collector_haptics.dart';
 import '../core/data/archive_types.dart';
+import '../features/collection/data/models/collectible_detail_navigation_context.dart';
 import '../features/collection/data/models/collectible_model.dart';
 import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../theme/app_colors.dart';
@@ -18,6 +19,7 @@ class CollectibleGridCard extends StatefulWidget {
     required this.collectible,
     required this.photoRef,
     required this.onCollectionChanged,
+    this.detailNavigationContext,
     this.onCollectibleUpdated,
     this.selectionMode = false,
     this.selected = false,
@@ -28,6 +30,7 @@ class CollectibleGridCard extends StatefulWidget {
   final CollectibleModel collectible;
   final ArchivePhotoRef? photoRef;
   final Future<void> Function() onCollectionChanged;
+  final CollectibleDetailNavigationContext? detailNavigationContext;
   final ValueChanged<CollectibleModel>? onCollectibleUpdated;
   final bool selectionMode;
   final bool selected;
@@ -66,6 +69,7 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
         builder: (_) => CollectibleDetailScreen(
           collectible: widget.collectible.copyWith(isFavorite: _isFavorite),
           photoRef: widget.photoRef,
+          navigationContext: widget.detailNavigationContext,
         ),
       ),
     );
@@ -142,9 +146,7 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: isSelectionMode
-            ? widget.onSelectionTap
-            : _openDetails,
+        onTap: isSelectionMode ? widget.onSelectionTap : _openDetails,
         onLongPress: widget.onLongPressSelection,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
@@ -230,9 +232,8 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
                                     ),
                                     shape: BoxShape.circle,
                                     border: Border.all(
-                                      color: AppColors.outlineVariant.withValues(
-                                        alpha: 0.2,
-                                      ),
+                                      color: AppColors.outlineVariant
+                                          .withValues(alpha: 0.2),
                                     ),
                                   ),
                                   child: IconButton(
@@ -288,13 +289,14 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
                           widget.collectible.category.toUpperCase(),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: AppColors.onSurfaceVariant.withValues(
-                              alpha: 0.74,
-                            ),
-                            fontSize: 9,
-                            letterSpacing: 0.7,
-                          ),
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: AppColors.onSurfaceVariant.withValues(
+                                  alpha: 0.74,
+                                ),
+                                fontSize: 9,
+                                letterSpacing: 0.7,
+                              ),
                         ),
                       ],
                     ),
@@ -315,6 +317,7 @@ class CollectibleListCard extends StatefulWidget {
     required this.collectible,
     required this.photoRef,
     required this.onCollectionChanged,
+    this.detailNavigationContext,
     this.onCollectibleUpdated,
     this.selectionMode = false,
     this.selected = false,
@@ -325,6 +328,7 @@ class CollectibleListCard extends StatefulWidget {
   final CollectibleModel collectible;
   final ArchivePhotoRef? photoRef;
   final Future<void> Function() onCollectionChanged;
+  final CollectibleDetailNavigationContext? detailNavigationContext;
   final ValueChanged<CollectibleModel>? onCollectibleUpdated;
   final bool selectionMode;
   final bool selected;
@@ -363,6 +367,7 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
         builder: (_) => CollectibleDetailScreen(
           collectible: widget.collectible.copyWith(isFavorite: _isFavorite),
           photoRef: widget.photoRef,
+          navigationContext: widget.detailNavigationContext,
         ),
       ),
     );
@@ -421,9 +426,7 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: isSelectionMode
-            ? widget.onSelectionTap
-            : _openDetails,
+        onTap: isSelectionMode ? widget.onSelectionTap : _openDetails,
         onLongPress: widget.onLongPressSelection,
         borderRadius: BorderRadius.circular(12),
         child: AnimatedContainer(

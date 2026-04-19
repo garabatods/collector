@@ -18,6 +18,7 @@ You are helping build **Collector App**, a Flutter mobile app in VS Code with Su
 - After each step, say exactly how to test it.
 - Always tell the user whether the change needs a full `flutter run` restart or just `r` / hot reload.
 - If the change is UI-only, explicitly recommend using Flutter hot reload to verify it instead of rebuilding.
+- If a change can be verified with a simple Flutter hot reload, perform that hot reload automatically after finishing the change unless the user says not to.
 - Only recommend a full restart or rebuild when the change affects app startup, runtime config, dependencies, native setup, or other non-UI initialization.
 - For archive and collection-facing read surfaces, default to the local-first architecture documented in `mdFiles/07_LOCAL_FIRST_ARCHITECTURE_RULES.md`.
 - Do not introduce new remote-first browse screens by default.

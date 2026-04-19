@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 
 import '../core/collector_haptics.dart';
+import '../core/data/archive_repository.dart';
 import '../core/data/archive_types.dart';
+import '../features/collection/data/models/collectible_detail_navigation_context.dart';
 import '../features/collection/data/models/collectible_model.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_photo_view.dart';
+import '../widgets/collector_button.dart';
 import '../widgets/collector_chip.dart';
 import '../widgets/collector_panel.dart';
-import '../widgets/collector_sticky_back_button.dart';
 import 'manual_add_collectible_screen.dart';
 
 const _detailHeaderBottomSpacing = AppSpacing.xl;
@@ -19,10 +21,12 @@ class CollectibleDetailScreen extends StatefulWidget {
     super.key,
     required this.collectible,
     this.photoRef,
+    this.navigationContext,
   });
 
   final CollectibleModel collectible;
   final ArchivePhotoRef? photoRef;
+  final CollectibleDetailNavigationContext? navigationContext;
 
   @override
   State<CollectibleDetailScreen> createState() =>
@@ -30,14 +34,32 @@ class CollectibleDetailScreen extends StatefulWidget {
 }
 
 class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
-  Future<void> _editItem() async {
+  late final PageController _pageController;
+  int _currentPageIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentPageIndex = widget.navigationContext?.initialIndex ?? 0;
+    _pageController = PageController(initialPage: _currentPageIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _editItem(
+    CollectibleModel collectible,
+    ArchivePhotoRef? photoRef,
+  ) async {
     CollectorHaptics.light();
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => ManualAddCollectibleScreen(
-          collectible: widget.collectible,
-          existingPhotoUrl:
-              widget.photoRef?.remoteUrl ?? widget.photoRef?.localPath,
+          collectible: collectible,
+          existingPhotoUrl: photoRef?.remoteUrl ?? photoRef?.localPath,
         ),
       ),
     );
@@ -51,7 +73,154 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final collectible = widget.collectible;
+    final navigationContext = widget.navigationContext;
+    final swipeEnabled = navigationContext?.canSwipe ?? false;
+    final currentCollectibleId = swipeEnabled
+        ? navigationContext!.collectibleIds[_currentPageIndex]
+        : widget.collectible.id;
+
+    return Scaffold(
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: const BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment.topCenter,
+                  radius: 1.15,
+                  colors: [AppColors.featureGlow, AppColors.background],
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    AppSpacing.md,
+                    AppSpacing.md,
+                    AppSpacing.lg,
+                  ),
+                  child: _CollectibleDetailTopBar(
+                    browsingLabel: swipeEnabled
+                        ? navigationContext!.sourceLabel
+                        : null,
+                    onBack: () => Navigator.of(context).pop(),
+                    editAction: swipeEnabled
+                        ? StreamBuilder<ArchiveCollectibleDetail?>(
+                            stream: currentCollectibleId == null
+                                ? null
+                                : ArchiveRepository.instance
+                                      .watchCollectibleDetail(
+                                        currentCollectibleId,
+                                      ),
+                            initialData:
+                                currentCollectibleId == widget.collectible.id
+                                ? ArchiveCollectibleDetail(
+                                    collectible: widget.collectible,
+                                    photoRef: widget.photoRef,
+                                  )
+                                : null,
+                            builder: (context, snapshot) {
+                              final detail = snapshot.data;
+                              return _DetailEditButton(
+                                onPressed: detail == null
+                                    ? null
+                                    : () => _editItem(
+                                        detail.collectible,
+                                        detail.photoRef,
+                                      ),
+                              );
+                            },
+                          )
+                        : _DetailEditButton(
+                            onPressed: () =>
+                                _editItem(widget.collectible, widget.photoRef),
+                          ),
+                  ),
+                ),
+                Expanded(
+                  child: swipeEnabled
+                      ? PageView.builder(
+                          controller: _pageController,
+                          onPageChanged: (index) {
+                            setState(() {
+                              _currentPageIndex = index;
+                            });
+                          },
+                          itemCount: navigationContext!.collectibleIds.length,
+                          itemBuilder: (context, index) {
+                            final collectibleId =
+                                navigationContext.collectibleIds[index];
+                            final initialDetail =
+                                collectibleId == widget.collectible.id
+                                ? ArchiveCollectibleDetail(
+                                    collectible: widget.collectible,
+                                    photoRef: widget.photoRef,
+                                  )
+                                : null;
+                            return _CollectibleDetailPage(
+                              collectibleId: collectibleId,
+                              initialDetail: initialDetail,
+                            );
+                          },
+                        )
+                      : _CollectibleDetailBody(
+                          collectible: widget.collectible,
+                          photoRef: widget.photoRef,
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CollectibleDetailPage extends StatelessWidget {
+  const _CollectibleDetailPage({
+    required this.collectibleId,
+    required this.initialDetail,
+  });
+
+  final String collectibleId;
+  final ArchiveCollectibleDetail? initialDetail;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<ArchiveCollectibleDetail?>(
+      stream: ArchiveRepository.instance.watchCollectibleDetail(collectibleId),
+      initialData: initialDetail,
+      builder: (context, snapshot) {
+        final detail = snapshot.data;
+        if (detail == null) {
+          return const _CollectibleDetailUnavailableState();
+        }
+
+        return _CollectibleDetailBody(
+          collectible: detail.collectible,
+          photoRef: detail.photoRef,
+        );
+      },
+    );
+  }
+}
+
+class _CollectibleDetailBody extends StatelessWidget {
+  const _CollectibleDetailBody({
+    required this.collectible,
+    required this.photoRef,
+  });
+
+  final CollectibleModel collectible;
+  final ArchivePhotoRef? photoRef;
+
+  @override
+  Widget build(BuildContext context) {
     final isComic = _isComicCollectible(collectible);
     final purchasePriceText = _formatCurrency(collectible.purchasePrice);
     final identityFields = <_DetailField>[
@@ -91,181 +260,244 @@ class _CollectibleDetailScreenState extends State<CollectibleDetailScreen> {
       ),
     ];
 
-    return Scaffold(
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: const BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment.topCenter,
-                  radius: 1.15,
-                  colors: [AppColors.featureGlow, AppColors.background],
-                ),
-              ),
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              0,
+              AppSpacing.md,
+              _detailHeaderBottomSpacing,
             ),
-          ),
-          SafeArea(
-            child: CustomScrollView(
-              slivers: [
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.md,
-                      AppSpacing.md,
-                      AppSpacing.md,
-                      _detailHeaderBottomSpacing,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const SizedBox(width: 48, height: 48),
-                            const Spacer(),
-                            SizedBox(
-                              height: 48,
-                              child: OutlinedButton.icon(
-                                onPressed: _editItem,
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppColors.primary,
-                                  side: BorderSide(
-                                    color: AppColors.outlineVariant.withValues(
-                                      alpha: 0.28,
-                                    ),
-                                  ),
-                                  backgroundColor:
-                                      AppColors.surfaceContainerHighest,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: AppSpacing.md,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                ),
-                                icon: const Icon(Icons.edit_outlined, size: 18),
-                                label: const Text('Edit'),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
-                        _DetailHero(
-                          collectible: collectible,
-                          photoRef: widget.photoRef,
-                          isComic: isComic,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.md,
-                    0,
-                    AppSpacing.md,
-                    120,
-                  ),
-                  sliver: SliverList(
-                    delegate: SliverChildListDelegate([
-                      if (collectible.tags.isNotEmpty) ...[
-                        _DetailSection(
-                          title: 'Tags',
-                          child: Wrap(
-                            spacing: AppSpacing.sm,
-                            runSpacing: AppSpacing.sm,
-                            children: [
-                              for (final tag in collectible.tags)
-                                CollectorChip(
-                                  label: tag.name,
-                                  tone: CollectorChipTone.primary,
-                                ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: _detailSectionSpacing),
-                      ],
-                      _DetailSection(
-                        title: 'Collector Snapshot',
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Wrap(
-                              spacing: AppSpacing.sm,
-                              runSpacing: AppSpacing.sm,
-                              children: [
-                                CollectorChip(label: collectible.category),
-                                if (collectible.isFavorite)
-                                  const CollectorChip(
-                                    label: 'Favorite',
-                                    tone: CollectorChipTone.primary,
-                                  ),
-                                if (collectible.isGrail)
-                                  const CollectorChip(
-                                    label: 'Grail',
-                                    tone: CollectorChipTone.secondary,
-                                  ),
-                                if (collectible.isDuplicate)
-                                  const CollectorChip(
-                                    label: 'Duplicate',
-                                    tone: CollectorChipTone.tertiary,
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: AppSpacing.md),
-                            _SnapshotMetricsGrid(
-                              collectible: collectible,
-                              isComic: isComic,
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (identityFields.isNotEmpty) ...[
-                        const SizedBox(height: _detailSectionSpacing),
-                        _DetailSection(
-                          title: 'Identity',
-                          child: _DetailFactGrid(fields: identityFields),
-                        ),
-                      ],
-                      if (collectorFields.isNotEmpty) ...[
-                        const SizedBox(height: _detailSectionSpacing),
-                        _DetailSection(
-                          title: 'Collector Data',
-                          child: _DetailFactGrid(fields: collectorFields),
-                        ),
-                      ],
-                      if (catalogFields.isNotEmpty) ...[
-                        const SizedBox(height: _detailSectionSpacing),
-                        _DetailSection(
-                          title: 'Value & Catalog',
-                          child: _DetailFactGrid(fields: catalogFields),
-                        ),
-                      ],
-                      if ((collectible.notes ?? '').isNotEmpty) ...[
-                        const SizedBox(height: _detailSectionSpacing),
-                        _DetailSection(
-                          title: 'Notes',
-                          child: Text(
-                            collectible.notes!,
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(
-                                  color: AppColors.onSurfaceVariant,
-                                  fontSize: 14,
-                                  height: 1.55,
-                                ),
-                          ),
-                        ),
-                      ],
-                    ]),
-                  ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _DetailHero(
+                  collectible: collectible,
+                  photoRef: photoRef,
+                  isComic: isComic,
                 ),
               ],
             ),
           ),
-          CollectorStickyBackButton(
-            onPressed: () => Navigator.of(context).pop(),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            0,
+            AppSpacing.md,
+            120,
           ),
+          sliver: SliverList(
+            delegate: SliverChildListDelegate([
+              if (collectible.tags.isNotEmpty) ...[
+                _DetailSection(
+                  title: 'Tags',
+                  child: Wrap(
+                    spacing: AppSpacing.sm,
+                    runSpacing: AppSpacing.sm,
+                    children: [
+                      for (final tag in collectible.tags)
+                        CollectorChip(
+                          label: tag.name,
+                          tone: CollectorChipTone.primary,
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: _detailSectionSpacing),
+              ],
+              _DetailSection(
+                title: 'Collector Snapshot',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.sm,
+                      children: [
+                        CollectorChip(label: collectible.category),
+                        if (collectible.isFavorite)
+                          const CollectorChip(
+                            label: 'Favorite',
+                            tone: CollectorChipTone.primary,
+                          ),
+                        if (collectible.isGrail)
+                          const CollectorChip(
+                            label: 'Grail',
+                            tone: CollectorChipTone.secondary,
+                          ),
+                        if (collectible.isDuplicate)
+                          const CollectorChip(
+                            label: 'Duplicate',
+                            tone: CollectorChipTone.tertiary,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    _SnapshotMetricsGrid(
+                      collectible: collectible,
+                      isComic: isComic,
+                    ),
+                  ],
+                ),
+              ),
+              if (identityFields.isNotEmpty) ...[
+                const SizedBox(height: _detailSectionSpacing),
+                _DetailSection(
+                  title: 'Identity',
+                  child: _DetailFactGrid(fields: identityFields),
+                ),
+              ],
+              if (collectorFields.isNotEmpty) ...[
+                const SizedBox(height: _detailSectionSpacing),
+                _DetailSection(
+                  title: 'Collector Data',
+                  child: _DetailFactGrid(fields: collectorFields),
+                ),
+              ],
+              if (catalogFields.isNotEmpty) ...[
+                const SizedBox(height: _detailSectionSpacing),
+                _DetailSection(
+                  title: 'Value & Catalog',
+                  child: _DetailFactGrid(fields: catalogFields),
+                ),
+              ],
+              if ((collectible.notes ?? '').isNotEmpty) ...[
+                const SizedBox(height: _detailSectionSpacing),
+                _DetailSection(
+                  title: 'Notes',
+                  child: Text(
+                    collectible.notes!,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: AppColors.onSurfaceVariant,
+                      fontSize: 14,
+                      height: 1.55,
+                    ),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CollectibleDetailUnavailableState extends StatelessWidget {
+  const _CollectibleDetailUnavailableState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xl),
+        child: CollectorPanel(
+          padding: const EdgeInsets.all(AppSpacing.xl),
+          backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.94),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.inventory_2_outlined,
+                size: 42,
+                color: AppColors.onSurfaceVariant,
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Text(
+                'This item is no longer available.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'It may have been removed or changed while you were browsing.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CollectibleDetailTopBar extends StatelessWidget {
+  const _CollectibleDetailTopBar({
+    required this.browsingLabel,
+    required this.onBack,
+    required this.editAction,
+  });
+
+  final String? browsingLabel;
+  final VoidCallback onBack;
+  final Widget editAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          SizedBox(
+            width: 48,
+            height: 48,
+            child: CollectorButton(
+              label: 'Back',
+              onPressed: onBack,
+              variant: CollectorButtonVariant.icon,
+              icon: Icons.arrow_back_rounded,
+            ),
+          ),
+          Expanded(
+            child: Center(
+              child: Text(
+                (browsingLabel ?? '').trim(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+          editAction,
         ],
+      ),
+    );
+  }
+}
+
+class _DetailEditButton extends StatelessWidget {
+  const _DetailEditButton({required this.onPressed});
+
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 48,
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: AppColors.primary,
+          side: BorderSide(
+            color: AppColors.outlineVariant.withValues(alpha: 0.28),
+          ),
+          backgroundColor: AppColors.surfaceContainerHighest,
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+        icon: const Icon(Icons.edit_outlined, size: 18),
+        label: const Text('Edit'),
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/collector_haptics.dart';
 import '../core/data/archive_repository.dart';
 import '../features/collection/data/repositories/collection_vocabulary_repository.dart';
+import '../features/collection/data/models/collection_library_navigation_preset.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_radii.dart';
 import '../theme/app_spacing.dart';
@@ -15,9 +16,9 @@ import '../widgets/collector_bottom_bar.dart';
 import '../widgets/collector_text_field.dart';
 import 'ai_photo_identification_screen.dart';
 import 'collection_home_screen.dart';
+import 'collection_insights_screen.dart';
 import 'collection_library_screen.dart';
 import 'collection_profile_screen.dart';
-import 'collection_wishlist_screen.dart';
 import 'manual_add_collectible_screen.dart';
 import 'scanner_flow_screen.dart';
 
@@ -35,7 +36,7 @@ class HomeDashboardScreen extends StatefulWidget {
   State<HomeDashboardScreen> createState() => _HomeDashboardScreenState();
 }
 
-enum _DashboardTab { home, library, wishlist, profile }
+enum _DashboardTab { home, library, insights, profile }
 
 class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   static const _fixedCategoryOptions = [
@@ -58,6 +59,11 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   final _librarySearchFocusRequest = 0;
   var _librarySelectionDismissRequest = 0;
   var _librarySelectionMode = false;
+  var _libraryNavigationRequest = 0;
+  CollectionLibraryNavigationPreset? _libraryNavigationPreset;
+  var _homeScrollRequest = 0;
+  CollectionHomeScrollTarget? _homeScrollTarget;
+  var _insightsActivationRequest = 0;
 
   @override
   void initState() {
@@ -82,6 +88,10 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       CollectorHaptics.selection();
     }
     setState(() {
+      if (tab == _DashboardTab.insights &&
+          _selectedTab != _DashboardTab.insights) {
+        _insightsActivationRequest++;
+      }
       _selectedTab = tab;
     });
   }
@@ -107,6 +117,33 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     if (_selectedTab != _DashboardTab.home) {
       _selectTab(_DashboardTab.home);
     }
+  }
+
+  void _openHomeSection(CollectionHomeScrollTarget target) {
+    if (_selectedTab != _DashboardTab.home) {
+      CollectorHaptics.selection();
+    }
+    setState(() {
+      _homeScrollTarget = target;
+      _homeScrollRequest++;
+      _selectedTab = _DashboardTab.home;
+    });
+  }
+
+  void _openLibraryWithPreset(CollectionLibraryNavigationPreset? preset) {
+    if (preset == null || preset.isEmpty) {
+      _selectTab(_DashboardTab.library);
+      return;
+    }
+
+    if (_selectedTab != _DashboardTab.library) {
+      CollectorHaptics.selection();
+    }
+    setState(() {
+      _libraryNavigationPreset = preset;
+      _libraryNavigationRequest++;
+      _selectedTab = _DashboardTab.library;
+    });
   }
 
   Future<void> _openAddEntrySheet() async {
@@ -232,8 +269,11 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         refreshSeed: _refreshSeed,
         onAddFirstItem: _openManualAddFlow,
         onScanItem: _openScannerFlow,
-        onOpenLibrary: () => _selectTab(_DashboardTab.library),
+        onOpenLibrary: _openLibraryWithPreset,
+        onOpenInsights: () => _selectTab(_DashboardTab.insights),
         onOpenProfile: () => _selectTab(_DashboardTab.profile),
+        scrollRequest: _homeScrollRequest,
+        scrollTarget: _homeScrollTarget,
       ),
       SafeArea(
         bottom: false,
@@ -241,6 +281,8 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
           refreshSeed: _refreshSeed,
           searchFocusRequest: _librarySearchFocusRequest,
           selectionDismissRequest: _librarySelectionDismissRequest,
+          navigationRequest: _libraryNavigationRequest,
+          navigationPreset: _libraryNavigationPreset,
           onSelectionModeChanged: (active) {
             if (_librarySelectionMode == active) {
               return;
@@ -253,7 +295,16 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       ),
       SafeArea(
         bottom: false,
-        child: CollectionWishlistScreen(refreshSeed: _refreshSeed),
+        child: CollectionInsightsScreen(
+          refreshSeed: _refreshSeed,
+          activationRequest: _insightsActivationRequest,
+          onAddFirstItem: _openManualAddFlow,
+          onOpenLibrary: _openLibraryWithPreset,
+          onOpenRecent: () =>
+              _openHomeSection(CollectionHomeScrollTarget.recent),
+          onOpenFavorites: () =>
+              _openHomeSection(CollectionHomeScrollTarget.favorites),
+        ),
       ),
       SafeArea(
         bottom: false,
@@ -261,6 +312,11 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
           refreshSeed: _refreshSeed,
           onProfileChanged: _refreshCollectionViews,
           onAddItem: _openManualAddFlow,
+          onOpenRecent: () =>
+              _openHomeSection(CollectionHomeScrollTarget.recent),
+          onOpenFavorites: () =>
+              _openHomeSection(CollectionHomeScrollTarget.favorites),
+          onOpenInsights: () => _selectTab(_DashboardTab.insights),
           onSignOut: widget.onSignOut,
         ),
       ),
@@ -333,10 +389,10 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                     onTap: _openAddEntrySheet,
                   ),
                   CollectorBottomBarItemData(
-                    icon: Icons.favorite_outline_rounded,
-                    label: 'Wishlist',
-                    active: _selectedTab == _DashboardTab.wishlist,
-                    onTap: () => _selectTab(_DashboardTab.wishlist),
+                    icon: Icons.insights_rounded,
+                    label: 'Insights',
+                    active: _selectedTab == _DashboardTab.insights,
+                    onTap: () => _selectTab(_DashboardTab.insights),
                   ),
                   CollectorBottomBarItemData(
                     icon: Icons.person_outline_rounded,

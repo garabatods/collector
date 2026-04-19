@@ -51,7 +51,8 @@ class ArchivePhotoRef {
   final bool hasPhotoRecord;
 
   bool get hasImage =>
-      (localPath ?? '').trim().isNotEmpty || (remoteUrl ?? '').trim().isNotEmpty;
+      (localPath ?? '').trim().isNotEmpty ||
+      (remoteUrl ?? '').trim().isNotEmpty;
 }
 
 class ArchiveHomeSummary {
@@ -89,6 +90,7 @@ class ArchiveLibraryFilters {
     this.grailsOnly = false,
     this.duplicatesOnly = false,
     this.hasPhotoOnly = false,
+    this.missingPhotoOnly = false,
     this.category,
   });
 
@@ -97,6 +99,7 @@ class ArchiveLibraryFilters {
   final bool grailsOnly;
   final bool duplicatesOnly;
   final bool hasPhotoOnly;
+  final bool missingPhotoOnly;
   final String? category;
 }
 
@@ -164,6 +167,9 @@ class ArchiveProfileSummary {
     required this.totalItems,
     required this.categoryCount,
     required this.favoriteCount,
+    required this.photoCount,
+    required this.topCategoryItemCount,
+    required this.topFranchiseItemCount,
     required this.wishlistCount,
     required this.latestItem,
     required this.featuredItem,
@@ -176,6 +182,9 @@ class ArchiveProfileSummary {
   final int totalItems;
   final int categoryCount;
   final int favoriteCount;
+  final int photoCount;
+  final int topCategoryItemCount;
+  final int topFranchiseItemCount;
   final int wishlistCount;
   final CollectibleModel? latestItem;
   final CollectibleModel? featuredItem;
@@ -184,9 +193,7 @@ class ArchiveProfileSummary {
 }
 
 class ArchiveWishlistSummary {
-  const ArchiveWishlistSummary({
-    required this.items,
-  });
+  const ArchiveWishlistSummary({required this.items});
 
   final List<WishlistItemModel> items;
 }

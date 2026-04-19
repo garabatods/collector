@@ -44,6 +44,7 @@ dependencies:
   path: ^1.9.1
   rxdart: ^0.28.0
   connectivity_plus: ^6.1.5
+  shared_preferences: ^2.5.3
 
 dev_dependencies:
   flutter_test:
@@ -74,6 +75,8 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/badges/
+    - assets/collector_levels/
     - assets/icons/
     - assets/icons/categories_v2/
     - assets/img/

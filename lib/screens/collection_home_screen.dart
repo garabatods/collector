@@ -4,23 +4,40 @@ import 'package:flutter/services.dart';
 import '../core/collector_haptics.dart';
 import '../core/data/archive_repository.dart';
 import '../core/data/archive_types.dart';
+import '../core/data/session_cache.dart';
+import '../features/collection/data/models/collectible_detail_navigation_context.dart';
+import '../features/collection/data/models/collection_library_navigation_preset.dart';
 import '../features/collection/data/models/collectible_model.dart';
+import '../features/gamification/data/models/collector_badge.dart';
+import '../features/gamification/data/models/collector_goal.dart';
+import '../features/gamification/data/services/collector_badge_award_store.dart';
+import '../features/gamification/data/services/collector_badge_engine.dart';
+import '../features/gamification/data/services/collector_goal_engine.dart';
+import '../features/home/data/models/home_collection_insight.dart';
+import '../features/home/data/services/home_collection_insight_engine.dart';
+import '../features/home/data/services/home_collection_insight_history_store.dart';
 import '../features/profile/data/models/profile_model.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_fonts.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/category_icon.dart';
+import '../widgets/collector_badge_unlock_sheet.dart';
 import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/collector_section_header.dart';
 import '../widgets/collector_skeleton.dart';
+import '../widgets/home_collector_goals_panel.dart';
+import '../widgets/home_collection_insight_card.dart';
 import '../widgets/resolved_avatar_image.dart';
 import 'all_categories_screen.dart';
 import 'category_collection_screen.dart';
 
 const _homeTopChromeColor = AppColors.dashboardGlow;
+const _homeCollectionInsightSessionKey = 'home_collection_insight.selection';
+
+enum CollectionHomeScrollTarget { recent, favorites }
 
 class CollectionHomeScreen extends StatefulWidget {
   const CollectionHomeScreen({
@@ -30,15 +47,21 @@ class CollectionHomeScreen extends StatefulWidget {
     required this.onAddFirstItem,
     required this.onScanItem,
     required this.onOpenLibrary,
+    required this.onOpenInsights,
     required this.onOpenProfile,
+    this.scrollRequest,
+    this.scrollTarget,
   });
 
   final bool isSupabaseConfigured;
   final int refreshSeed;
   final VoidCallback onAddFirstItem;
   final VoidCallback onScanItem;
-  final VoidCallback onOpenLibrary;
+  final ValueChanged<CollectionLibraryNavigationPreset?> onOpenLibrary;
+  final VoidCallback onOpenInsights;
   final VoidCallback onOpenProfile;
+  final int? scrollRequest;
+  final CollectionHomeScrollTarget? scrollTarget;
 
   @override
   State<CollectionHomeScreen> createState() => _CollectionHomeScreenState();
@@ -112,8 +135,12 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
                   data: data,
                   collectibles: data.collectibles,
                   onCollectionChanged: _reload,
+                  onAddFirstItem: widget.onAddFirstItem,
                   onOpenLibrary: widget.onOpenLibrary,
+                  onOpenInsights: widget.onOpenInsights,
                   onOpenProfile: widget.onOpenProfile,
+                  scrollRequest: widget.scrollRequest,
+                  scrollTarget: widget.scrollTarget,
                 ),
               ],
             );
@@ -129,15 +156,23 @@ class _LoadedHomeState extends StatefulWidget {
     required this.data,
     required this.collectibles,
     required this.onCollectionChanged,
+    required this.onAddFirstItem,
     required this.onOpenLibrary,
+    required this.onOpenInsights,
     required this.onOpenProfile,
+    this.scrollRequest,
+    required this.scrollTarget,
   });
 
   final ArchiveHomeSummary data;
   final List<CollectibleModel> collectibles;
   final Future<void> Function() onCollectionChanged;
-  final VoidCallback onOpenLibrary;
+  final VoidCallback onAddFirstItem;
+  final ValueChanged<CollectionLibraryNavigationPreset?> onOpenLibrary;
+  final VoidCallback onOpenInsights;
   final VoidCallback onOpenProfile;
+  final int? scrollRequest;
+  final CollectionHomeScrollTarget? scrollTarget;
 
   @override
   State<_LoadedHomeState> createState() => _LoadedHomeStateState();
@@ -145,17 +180,53 @@ class _LoadedHomeState extends StatefulWidget {
 
 class _LoadedHomeStateState extends State<_LoadedHomeState> {
   late final ScrollController _scrollController;
+  final _historyStore = HomeCollectionInsightHistoryStore.instance;
+  final _badgeAwardStore = CollectorBadgeAwardStore.instance;
+  final _recentSectionKey = GlobalKey();
+  final _favoritesSectionKey = GlobalKey();
+
+  HomeCollectionInsightHistory? _insightHistory;
+  HomeCollectionInsight? _selectedInsight;
+  List<CollectorGoal> _collectorGoals = const [];
+  bool _isResolvingInsight = true;
+  String? _lastGamificationSignature;
 
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
+    _loadInsightHistory();
+    _syncGamification();
   }
 
   @override
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LoadedHomeState oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.data != widget.data && _insightHistory != null) {
+      _resolveInsight();
+    }
+    if (oldWidget.data != widget.data) {
+      _syncGamification();
+    }
+    if ((oldWidget.scrollRequest ?? 0) != (widget.scrollRequest ?? 0) &&
+        widget.scrollTarget != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        final targetKey =
+            widget.scrollTarget == CollectionHomeScrollTarget.recent
+            ? _recentSectionKey
+            : _favoritesSectionKey;
+        _scrollToSection(targetKey);
+      });
+    }
   }
 
   @override
@@ -204,24 +275,7 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  CollectorSectionHeader(
-                    title: 'Categories',
-                    trailing: TextButton(
-                      onPressed: allCategoryHighlights.isEmpty
-                          ? widget.onOpenLibrary
-                          : _openAllCategoriesScreen,
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.primary,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.sm,
-                          vertical: AppSpacing.xs,
-                        ),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: const Text('View all'),
-                    ),
-                  ),
+                  const CollectorSectionHeader(title: 'Categories'),
                   const SizedBox(height: AppSpacing.md),
                   if (categoryHighlights.isEmpty)
                     const _InlineMessagePanel(
@@ -263,22 +317,9 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                                   compactLayout: compactLayout,
                                   height: cardHeight,
                                   onTap: () async {
-                                    CollectorHaptics.light();
-                                    final changed = await Navigator.of(context)
-                                        .push<bool>(
-                                          MaterialPageRoute<bool>(
-                                            builder: (_) =>
-                                                CategoryCollectionScreen(
-                                                  category:
-                                                      categoryHighlights[index]
-                                                          .title,
-                                                ),
-                                          ),
-                                        );
-
-                                    if (changed == true) {
-                                      await widget.onCollectionChanged();
-                                    }
+                                    await _openCategoryCollection(
+                                      categoryHighlights[index].title,
+                                    );
                                   },
                                 ),
                               ),
@@ -286,13 +327,75 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                         );
                       },
                     ),
+                  const SizedBox(height: AppSpacing.md),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: allCategoryHighlights.isEmpty
+                          ? () => widget.onOpenLibrary(null)
+                          : _openAllCategoriesScreen,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        backgroundColor: AppColors.surfaceContainerHighest
+                            .withValues(alpha: 0.36),
+                        side: BorderSide(
+                          color: AppColors.primary.withValues(alpha: 0.2),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.md,
+                          vertical: AppSpacing.md,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      icon: Image.asset(
+                        'assets/icons/categories_v2/other2.png',
+                        width: 30,
+                        height: 30,
+                        fit: BoxFit.contain,
+                      ),
+                      label: const Text('All Categories'),
+                    ),
+                  ),
                   const SizedBox(height: AppSpacing.section),
-                  CollectorSectionHeader(
-                    title: 'Recently Added',
-                    trailing: Text(
-                      'Latest Arrivals',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: AppColors.primary,
+                  if (_collectorGoals.isNotEmpty) ...[
+                    HomeCollectorGoalsPanel(goals: _collectorGoals),
+                    const SizedBox(height: AppSpacing.section),
+                  ],
+                  if (_isResolvingInsight || _selectedInsight != null) ...[
+                    Text(
+                      'COLLECTION INSIGHT',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: AppColors.onSurfaceVariant.withValues(
+                          alpha: 0.88,
+                        ),
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                  ],
+                  if (_isResolvingInsight)
+                    const _HomeCollectionInsightSkeleton()
+                  else if (_selectedInsight != null) ...[
+                    HomeCollectionInsightCard(
+                      insight: _selectedInsight!,
+                      onPressed: _selectedInsight!.action == null
+                          ? null
+                          : () =>
+                                _handleInsightAction(_selectedInsight!.action),
+                    ),
+                    const SizedBox(height: AppSpacing.section),
+                  ],
+                  KeyedSubtree(
+                    key: _recentSectionKey,
+                    child: CollectorSectionHeader(
+                      title: 'Recently Added',
+                      trailing: Text(
+                        'Latest Arrivals',
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: AppColors.primary,
+                        ),
                       ),
                     ),
                   ),
@@ -323,18 +426,27 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                               collectible: item,
                               photoRef: photoRef,
                               onCollectionChanged: widget.onCollectionChanged,
+                              detailNavigationContext:
+                                  CollectibleDetailNavigationContext.fromCollectibles(
+                                    source: CollectibleDetailSource.homeRecent,
+                                    collectibles: recentItems,
+                                    currentCollectible: item,
+                                  ),
                             ),
                           );
                         },
                       ),
                     ),
                   const SizedBox(height: AppSpacing.section),
-                  CollectorSectionHeader(
-                    title: 'Favorites',
-                    trailing: Text(
-                      'Collector Picks',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: AppColors.primary,
+                  KeyedSubtree(
+                    key: _favoritesSectionKey,
+                    child: CollectorSectionHeader(
+                      title: 'Favorites',
+                      trailing: Text(
+                        'Collector Picks',
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: AppColors.primary,
+                        ),
                       ),
                     ),
                   ),
@@ -365,6 +477,13 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
                               collectible: item,
                               photoRef: photoRef,
                               onCollectionChanged: widget.onCollectionChanged,
+                              detailNavigationContext:
+                                  CollectibleDetailNavigationContext.fromCollectibles(
+                                    source:
+                                        CollectibleDetailSource.homeFavorites,
+                                    collectibles: favoriteItems,
+                                    currentCollectible: item,
+                                  ),
                             ),
                           );
                         },
@@ -418,6 +537,165 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
     }
   }
 
+  Future<void> _loadInsightHistory() async {
+    final history = await _historyStore.read();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _insightHistory = history;
+    });
+    await _resolveInsight();
+  }
+
+  Future<void> _syncGamification() async {
+    final progress = CollectorProgressSnapshot.fromHomeSummary(widget.data);
+    final signature = CollectorBadgeEngine.buildSignature(progress);
+    if (_lastGamificationSignature == signature) {
+      return;
+    }
+
+    final unlockedBadges = CollectorBadgeEngine.unlockedBadges(progress);
+    final syncResult = await _badgeAwardStore.syncUnlocked(unlockedBadges);
+    if (!mounted) {
+      return;
+    }
+
+    final awards = syncResult.awards;
+    final earnedBadgeIds = awards.map((award) => award.badge.id).toSet();
+    final goals = CollectorGoalEngine.buildGoals(
+      summary: widget.data,
+      earnedBadgeIds: earnedBadgeIds,
+    );
+
+    setState(() {
+      _lastGamificationSignature = signature;
+      _collectorGoals = goals;
+    });
+
+    if (syncResult.newAwards.isNotEmpty) {
+      CollectorHaptics.medium();
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => CollectorBadgeUnlockSheet(
+          awards: syncResult.newAwards,
+          primaryActionLabel: 'View Badges',
+          onPrimaryAction: widget.onOpenProfile,
+        ),
+      );
+    }
+  }
+
+  Future<void> _resolveInsight() async {
+    final history = _insightHistory;
+    if (history == null) {
+      return;
+    }
+
+    final signature = HomeCollectionInsightEngine.buildSessionSignature(
+      widget.data,
+    );
+    final cached = SessionCache.get<_HomeInsightSessionSelection>(
+      _homeCollectionInsightSessionKey,
+    );
+
+    if (cached != null && cached.signature == signature) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _selectedInsight = cached.insight;
+        _isResolvingInsight = false;
+      });
+      return;
+    }
+
+    final insight = HomeCollectionInsightEngine.selectInsight(
+      summary: widget.data,
+      history: history,
+    );
+
+    var nextHistory = history;
+    if (insight != null) {
+      nextHistory = await _historyStore.recordShown(insight, history);
+    }
+
+    SessionCache.set(
+      _homeCollectionInsightSessionKey,
+      _HomeInsightSessionSelection(signature: signature, insight: insight),
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _selectedInsight = insight;
+      _insightHistory = nextHistory;
+      _isResolvingInsight = false;
+    });
+  }
+
+  Future<void> _handleInsightAction(HomeCollectionInsightAction? action) async {
+    if (action == null) {
+      return;
+    }
+
+    switch (action.type) {
+      case HomeCollectionInsightActionType.openLibrary:
+        CollectorHaptics.light();
+        widget.onOpenLibrary(action.toLibraryNavigationPreset());
+        return;
+      case HomeCollectionInsightActionType.openCategory:
+        final category = action.category;
+        if (category == null || category.trim().isEmpty) {
+          CollectorHaptics.light();
+          widget.onOpenLibrary(null);
+          return;
+        }
+        await _openCategoryCollection(category);
+        return;
+      case HomeCollectionInsightActionType.scrollToRecent:
+        CollectorHaptics.light();
+        await _scrollToSection(_recentSectionKey);
+        return;
+      case HomeCollectionInsightActionType.scrollToFavorites:
+        CollectorHaptics.light();
+        await _scrollToSection(_favoritesSectionKey);
+        return;
+    }
+  }
+
+  Future<void> _openCategoryCollection(String category) async {
+    CollectorHaptics.light();
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => CategoryCollectionScreen(category: category),
+      ),
+    );
+
+    if (changed == true) {
+      await widget.onCollectionChanged();
+    }
+  }
+
+  Future<void> _scrollToSection(GlobalKey key) async {
+    final targetContext = key.currentContext;
+    if (targetContext == null) {
+      return;
+    }
+
+    await Scrollable.ensureVisible(
+      targetContext,
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeOutCubic,
+      alignment: 0.08,
+    );
+  }
+
   _CategoryCardStyle _resolveCategoryCardStyle(int index) {
     const rotatingStyles = <_CategoryCardStyle>[
       _CategoryCardStyle.rose(),
@@ -425,11 +703,21 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
       _CategoryCardStyle.amber(),
       _CategoryCardStyle.azure(),
       _CategoryCardStyle.emerald(),
-      _CategoryCardStyle.slate(),
+      _CategoryCardStyle.coral(),
     ];
 
     return rotatingStyles[index % rotatingStyles.length];
   }
+}
+
+class _HomeInsightSessionSelection {
+  const _HomeInsightSessionSelection({
+    required this.signature,
+    required this.insight,
+  });
+
+  final String signature;
+  final HomeCollectionInsight? insight;
 }
 
 class _EmptyHomeState extends StatelessWidget {
@@ -663,6 +951,8 @@ class _CollectionHomeLoadingState extends StatelessWidget {
                     },
                   ),
                   const SizedBox(height: AppSpacing.section),
+                  const _HomeCollectionInsightSkeleton(),
+                  const SizedBox(height: AppSpacing.section),
                   const CollectorSectionHeaderSkeleton(trailingWidth: 104),
                   const SizedBox(height: AppSpacing.md),
                   SizedBox(
@@ -696,6 +986,42 @@ class _CollectionHomeLoadingState extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeCollectionInsightSkeleton extends StatelessWidget {
+  const _HomeCollectionInsightSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return CollectorPanel(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      backgroundColor: AppColors.surfaceContainerHigh,
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: CollectorSkeletonBlock(width: 132, height: 14)),
+              SizedBox(width: AppSpacing.md),
+              CollectorSkeletonBlock(
+                width: 42,
+                height: 42,
+                shape: BoxShape.circle,
+              ),
+            ],
+          ),
+          SizedBox(height: AppSpacing.md),
+          CollectorSkeletonBlock(width: 240, height: 26),
+          SizedBox(height: AppSpacing.sm),
+          CollectorSkeletonBlock(width: double.infinity, height: 16),
+          SizedBox(height: AppSpacing.xs),
+          CollectorSkeletonBlock(width: 280, height: 16),
+          SizedBox(height: AppSpacing.lg),
+          CollectorSkeletonBlock(width: 156, height: 40),
         ],
       ),
     );
@@ -1272,11 +1598,11 @@ class _CategoryCardStyle {
       titleColor = AppColors.categoryEmeraldForeground,
       itemCountColor = AppColors.categoryEmeraldForeground;
 
-  const _CategoryCardStyle.slate()
-    : backgroundColor = AppColors.categorySlateBackground,
-      borderColor = AppColors.categorySlateBorder,
-      titleColor = AppColors.categorySlateForeground,
-      itemCountColor = AppColors.categorySlateForeground;
+  const _CategoryCardStyle.coral()
+    : backgroundColor = AppColors.categoryCoralBackground,
+      borderColor = AppColors.categoryCoralBorder,
+      titleColor = AppColors.categoryCoralForeground,
+      itemCountColor = AppColors.categoryCoralForeground;
 
   final Color backgroundColor;
   final Color borderColor;

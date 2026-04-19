@@ -65,6 +65,9 @@ abstract final class AppColors {
   static const categoryEmeraldBackground = Color(0x1A0F766E);
   static const categoryEmeraldBorder = Color(0x3391F2C0);
   static const categoryEmeraldForeground = Color(0xFF91F2C0);
+  static const categoryCoralBackground = Color(0x1A7C2D12);
+  static const categoryCoralBorder = Color(0x33FF9F7A);
+  static const categoryCoralForeground = Color(0xFFFFB195);
   static const categorySlateBackground = Color(0x1A334155);
   static const categorySlateBorder = Color(0x33CBD5E1);
   static const categorySlateForeground = Color(0xFFE2E8F0);

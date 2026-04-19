@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../core/collector_haptics.dart';
 import '../core/data/archive_repository.dart';
 import '../core/data/archive_types.dart';
+import '../features/collection/data/models/collectible_detail_navigation_context.dart';
+import '../features/collection/data/models/collection_library_navigation_preset.dart';
 import '../features/collection/data/repositories/collectible_photos_repository.dart';
 import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../theme/app_colors.dart';
@@ -23,12 +25,16 @@ class CollectionLibraryScreen extends StatefulWidget {
     required this.refreshSeed,
     this.searchFocusRequest = 0,
     this.selectionDismissRequest = 0,
+    this.navigationRequest = 0,
+    this.navigationPreset,
     this.onSelectionModeChanged,
   });
 
   final int refreshSeed;
   final int searchFocusRequest;
   final int selectionDismissRequest;
+  final int navigationRequest;
+  final CollectionLibraryNavigationPreset? navigationPreset;
   final ValueChanged<bool>? onSelectionModeChanged;
 
   @override
@@ -57,6 +63,8 @@ class _CollectionLibraryScreenState extends State<CollectionLibraryScreen> {
       child: _CollectionLibraryLoadedState(
         searchFocusRequest: widget.searchFocusRequest,
         selectionDismissRequest: widget.selectionDismissRequest,
+        navigationRequest: widget.navigationRequest,
+        navigationPreset: widget.navigationPreset,
         onCollectionChanged: _reload,
         onSelectionModeChanged: widget.onSelectionModeChanged,
       ),
@@ -78,12 +86,16 @@ class _CollectionLibraryLoadedState extends StatefulWidget {
   const _CollectionLibraryLoadedState({
     required this.searchFocusRequest,
     required this.selectionDismissRequest,
+    required this.navigationRequest,
+    this.navigationPreset,
     required this.onCollectionChanged,
     this.onSelectionModeChanged,
   });
 
   final int searchFocusRequest;
   final int selectionDismissRequest;
+  final int navigationRequest;
+  final CollectionLibraryNavigationPreset? navigationPreset;
   final Future<void> Function() onCollectionChanged;
   final ValueChanged<bool>? onSelectionModeChanged;
 
@@ -107,6 +119,7 @@ class _CollectionLibraryLoadedStateState
   var _grailsOnly = false;
   var _duplicatesOnly = false;
   var _hasPhotoOnly = false;
+  var _missingPhotoOnly = false;
   String? _selectedCategory;
   var _sort = _LibrarySortOption.newest;
   var _viewMode = _LibraryViewMode.grid;
@@ -128,6 +141,9 @@ class _CollectionLibraryLoadedStateState
     _stream = _buildStream();
     _searchController.addListener(_handleQueryChanged);
     _scrollController.addListener(_handleScroll);
+    if (widget.navigationPreset != null && !widget.navigationPreset!.isEmpty) {
+      _applyNavigationPreset(widget.navigationPreset);
+    }
     _reportSelectionModeIfChanged();
   }
 
@@ -153,11 +169,47 @@ class _CollectionLibraryLoadedStateState
     if (oldWidget.selectionDismissRequest != widget.selectionDismissRequest) {
       _exitSelectionMode();
     }
+    if (oldWidget.navigationRequest != widget.navigationRequest) {
+      _applyNavigationPreset(widget.navigationPreset);
+    }
   }
 
   void _handleQueryChanged() {
     setState(() {
       _visibleItemCount = _pageSize;
+      _stream = _buildStream();
+    });
+  }
+
+  void _applyNavigationPreset(CollectionLibraryNavigationPreset? preset) {
+    final normalizedQuery = preset?.query.trim() ?? '';
+    final normalizedCategory = preset?.category?.trim();
+    final nextCategory =
+        (normalizedCategory == null || normalizedCategory.isEmpty)
+        ? null
+        : normalizedCategory;
+    final nextFavoritesOnly = preset?.favoritesOnly ?? false;
+    final nextMissingPhotoOnly = preset?.missingPhotoOnly ?? false;
+    final nextHasPhotoOnly =
+        (preset?.hasPhotoOnly ?? false) && !nextMissingPhotoOnly;
+
+    _searchController.removeListener(_handleQueryChanged);
+    _searchController.value = TextEditingValue(
+      text: normalizedQuery,
+      selection: TextSelection.collapsed(offset: normalizedQuery.length),
+    );
+    _searchController.addListener(_handleQueryChanged);
+
+    _exitSelectionMode();
+    setState(() {
+      _favoritesOnly = nextFavoritesOnly;
+      _grailsOnly = false;
+      _duplicatesOnly = false;
+      _hasPhotoOnly = nextHasPhotoOnly;
+      _missingPhotoOnly = nextMissingPhotoOnly;
+      _selectedCategory = nextCategory;
+      _sort = _LibrarySortOption.newest;
+      _resetVisibleItems();
       _stream = _buildStream();
     });
   }
@@ -224,6 +276,7 @@ class _CollectionLibraryLoadedStateState
         grailsOnly: _grailsOnly,
         duplicatesOnly: _duplicatesOnly,
         hasPhotoOnly: _hasPhotoOnly,
+        missingPhotoOnly: _missingPhotoOnly,
       ),
     );
 
@@ -235,7 +288,8 @@ class _CollectionLibraryLoadedStateState
         nextRefinement.favoritesOnly == _favoritesOnly &&
         nextRefinement.grailsOnly == _grailsOnly &&
         nextRefinement.duplicatesOnly == _duplicatesOnly &&
-        nextRefinement.hasPhotoOnly == _hasPhotoOnly) {
+        nextRefinement.hasPhotoOnly == _hasPhotoOnly &&
+        nextRefinement.missingPhotoOnly == _missingPhotoOnly) {
       return;
     }
 
@@ -245,6 +299,7 @@ class _CollectionLibraryLoadedStateState
       _grailsOnly = nextRefinement.grailsOnly;
       _duplicatesOnly = nextRefinement.duplicatesOnly;
       _hasPhotoOnly = nextRefinement.hasPhotoOnly;
+      _missingPhotoOnly = nextRefinement.missingPhotoOnly;
       _resetVisibleItems();
       _stream = _buildStream();
     });
@@ -288,6 +343,7 @@ class _CollectionLibraryLoadedStateState
       _grailsOnly = false;
       _duplicatesOnly = false;
       _hasPhotoOnly = false;
+      _missingPhotoOnly = false;
       _selectedCategory = null;
       _searchController.clear();
       _sort = _LibrarySortOption.newest;
@@ -410,6 +466,7 @@ class _CollectionLibraryLoadedStateState
         _grailsOnly ||
         _duplicatesOnly ||
         _hasPhotoOnly ||
+        _missingPhotoOnly ||
         _sort != _LibrarySortOption.newest;
   }
 
@@ -419,6 +476,7 @@ class _CollectionLibraryLoadedStateState
         !_grailsOnly &&
         !_duplicatesOnly &&
         !_hasPhotoOnly &&
+        !_missingPhotoOnly &&
         _selectedCategory == null &&
         _sort == _LibrarySortOption.newest;
   }
@@ -439,6 +497,7 @@ class _CollectionLibraryLoadedStateState
         grailsOnly: _grailsOnly,
         duplicatesOnly: _duplicatesOnly,
         hasPhotoOnly: _hasPhotoOnly,
+        missingPhotoOnly: _missingPhotoOnly,
         category: _selectedCategory,
       ),
       sort: _archiveSort,
@@ -552,6 +611,7 @@ class _CollectionLibraryLoadedStateState
                               grailsOnly: _grailsOnly,
                               duplicatesOnly: _duplicatesOnly,
                               hasPhotoOnly: _hasPhotoOnly,
+                              missingPhotoOnly: _missingPhotoOnly,
                               onClearSort: () {
                                 setState(() {
                                   _sort = _LibrarySortOption.newest;
@@ -583,6 +643,13 @@ class _CollectionLibraryLoadedStateState
                               onClearHasPhoto: () {
                                 setState(() {
                                   _hasPhotoOnly = false;
+                                  _resetVisibleItems();
+                                  _stream = _buildStream();
+                                });
+                              },
+                              onClearMissingPhoto: () {
+                                setState(() {
+                                  _missingPhotoOnly = false;
                                   _resetVisibleItems();
                                   _stream = _buildStream();
                                 });
@@ -642,6 +709,12 @@ class _CollectionLibraryLoadedStateState
                             collectible: collectible,
                             photoRef: photoRef,
                             onCollectionChanged: widget.onCollectionChanged,
+                            detailNavigationContext:
+                                CollectibleDetailNavigationContext.fromCollectibles(
+                                  source: CollectibleDetailSource.library,
+                                  collectibles: data.items,
+                                  currentCollectible: collectible,
+                                ),
                             selectionMode: _isSelectionMode,
                             selected:
                                 id != null &&
@@ -688,6 +761,12 @@ class _CollectionLibraryLoadedStateState
                             collectible: collectible,
                             photoRef: photoRef,
                             onCollectionChanged: widget.onCollectionChanged,
+                            detailNavigationContext:
+                                CollectibleDetailNavigationContext.fromCollectibles(
+                                  source: CollectibleDetailSource.library,
+                                  collectibles: data.items,
+                                  currentCollectible: collectible,
+                                ),
                             selectionMode: _isSelectionMode,
                             selected:
                                 id != null &&
@@ -1055,11 +1134,13 @@ class _ActiveBrowseStrip extends StatelessWidget {
     required this.grailsOnly,
     required this.duplicatesOnly,
     required this.hasPhotoOnly,
+    required this.missingPhotoOnly,
     required this.onClearSort,
     required this.onClearFavorites,
     required this.onClearGrails,
     required this.onClearDuplicates,
     required this.onClearHasPhoto,
+    required this.onClearMissingPhoto,
     required this.onClearAll,
   });
 
@@ -1069,11 +1150,13 @@ class _ActiveBrowseStrip extends StatelessWidget {
   final bool grailsOnly;
   final bool duplicatesOnly;
   final bool hasPhotoOnly;
+  final bool missingPhotoOnly;
   final VoidCallback onClearSort;
   final VoidCallback onClearFavorites;
   final VoidCallback onClearGrails;
   final VoidCallback onClearDuplicates;
   final VoidCallback onClearHasPhoto;
+  final VoidCallback onClearMissingPhoto;
   final VoidCallback onClearAll;
 
   @override
@@ -1100,6 +1183,13 @@ class _ActiveBrowseStrip extends StatelessWidget {
           ],
           if (hasPhotoOnly) ...[
             _AppliedBrowseChip(label: 'Has photo', onTap: onClearHasPhoto),
+            const SizedBox(width: AppSpacing.sm),
+          ],
+          if (missingPhotoOnly) ...[
+            _AppliedBrowseChip(
+              label: 'Missing photos',
+              onTap: onClearMissingPhoto,
+            ),
             const SizedBox(width: AppSpacing.sm),
           ],
           _AppliedBrowseChip(
@@ -1279,6 +1369,7 @@ class _LibraryRefineSelection {
     required this.grailsOnly,
     required this.duplicatesOnly,
     required this.hasPhotoOnly,
+    required this.missingPhotoOnly,
   });
 
   final _LibrarySortOption sort;
@@ -1286,6 +1377,7 @@ class _LibraryRefineSelection {
   final bool grailsOnly;
   final bool duplicatesOnly;
   final bool hasPhotoOnly;
+  final bool missingPhotoOnly;
 }
 
 class _LibraryBrowseScope {
@@ -1534,6 +1626,7 @@ class _LibraryRefineSheet extends StatefulWidget {
     required this.grailsOnly,
     required this.duplicatesOnly,
     required this.hasPhotoOnly,
+    required this.missingPhotoOnly,
   });
 
   final _LibrarySortOption sort;
@@ -1541,6 +1634,7 @@ class _LibraryRefineSheet extends StatefulWidget {
   final bool grailsOnly;
   final bool duplicatesOnly;
   final bool hasPhotoOnly;
+  final bool missingPhotoOnly;
 
   @override
   State<_LibraryRefineSheet> createState() => _LibraryRefineSheetState();
@@ -1552,6 +1646,7 @@ class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
   late bool _grailsOnly;
   late bool _duplicatesOnly;
   late bool _hasPhotoOnly;
+  late bool _missingPhotoOnly;
 
   @override
   void initState() {
@@ -1561,6 +1656,7 @@ class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
     _grailsOnly = widget.grailsOnly;
     _duplicatesOnly = widget.duplicatesOnly;
     _hasPhotoOnly = widget.hasPhotoOnly;
+    _missingPhotoOnly = widget.missingPhotoOnly;
   }
 
   void _reset() {
@@ -1570,6 +1666,7 @@ class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
       _grailsOnly = false;
       _duplicatesOnly = false;
       _hasPhotoOnly = false;
+      _missingPhotoOnly = false;
     });
   }
 
@@ -1581,6 +1678,7 @@ class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
         grailsOnly: _grailsOnly,
         duplicatesOnly: _duplicatesOnly,
         hasPhotoOnly: _hasPhotoOnly,
+        missingPhotoOnly: _missingPhotoOnly,
       ),
     );
   }
@@ -1671,6 +1769,24 @@ class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
             onTap: () {
               setState(() {
                 _hasPhotoOnly = !_hasPhotoOnly;
+                if (_hasPhotoOnly) {
+                  _missingPhotoOnly = false;
+                }
+              });
+            },
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _LibraryFilterOption(
+            label: 'Missing photos',
+            description: 'Only include collectibles that still need images.',
+            active: _missingPhotoOnly,
+            icon: Icons.image_not_supported_outlined,
+            onTap: () {
+              setState(() {
+                _missingPhotoOnly = !_missingPhotoOnly;
+                if (_missingPhotoOnly) {
+                  _hasPhotoOnly = false;
+                }
               });
             },
           ),

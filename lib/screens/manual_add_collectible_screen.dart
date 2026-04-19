@@ -495,13 +495,6 @@ class _ManualAddCollectibleScreenState
     });
   }
 
-  void _toggleFavoriteFlag(bool value) {
-    CollectorHaptics.selection();
-    setState(() {
-      _isFavorite = value;
-    });
-  }
-
   Future<void> _openPhotoSourceSheet() async {
     CollectorHaptics.light();
     final source = await showModalBottomSheet<ImageSource>(
@@ -1146,10 +1139,7 @@ class _ManualAddCollectibleScreenState
                         selectedImage: selectedImage,
                         existingPhotoUrl: widget.existingPhotoUrl,
                         lookupImageUrl: widget.identificationResult?.imageUrl,
-                        isFavorite: _isFavorite,
                         onEditPhoto: _openPhotoSourceSheet,
-                        onToggleFavorite: () =>
-                            _toggleFavoriteFlag(!_isFavorite),
                       ),
                       const SizedBox(height: AppSpacing.lg),
                       _SectionPanel(
@@ -1196,9 +1186,8 @@ class _ManualAddCollectibleScreenState
                                 label: _brandFieldLabel,
                                 value: _resolvedBrandDisplayValue(),
                                 helperText: _brandFieldHelperText,
-                                actionLabel: (_resolvedBrand() ?? '')
-                                        .trim()
-                                        .isEmpty
+                                actionLabel:
+                                    (_resolvedBrand() ?? '').trim().isEmpty
                                     ? 'Choose'
                                     : 'Change',
                                 onTap: _openBrandSelectorSheet,
@@ -1216,7 +1205,9 @@ class _ManualAddCollectibleScreenState
                                 label: 'Tags',
                                 value: _resolvedTagsDisplayValue,
                                 helperText: _tagsFieldHelperText,
-                                actionLabel: _hasSelectedTags ? 'Edit' : 'Choose',
+                                actionLabel: _hasSelectedTags
+                                    ? 'Edit'
+                                    : 'Choose',
                                 onTap: _openTagsSelectorSheet,
                                 isPlaceholder: !_hasSelectedTags,
                                 footer: _hasSelectedTags
@@ -1242,7 +1233,7 @@ class _ManualAddCollectibleScreenState
                                                 label: tagName,
                                                 onRemove: () =>
                                                     _removeNewTagName(tagName),
-                                            ),
+                                              ),
                                           ],
                                         ),
                                       )
@@ -1272,9 +1263,8 @@ class _ManualAddCollectibleScreenState
                                 label: _brandFieldLabel,
                                 value: _resolvedBrandDisplayValue(),
                                 helperText: _brandFieldHelperText,
-                                actionLabel: (_resolvedBrand() ?? '')
-                                        .trim()
-                                        .isEmpty
+                                actionLabel:
+                                    (_resolvedBrand() ?? '').trim().isEmpty
                                     ? 'Choose'
                                     : 'Change',
                                 onTap: _openBrandSelectorSheet,
@@ -1292,7 +1282,9 @@ class _ManualAddCollectibleScreenState
                                 label: 'Tags',
                                 value: _resolvedTagsDisplayValue,
                                 helperText: _tagsFieldHelperText,
-                                actionLabel: _hasSelectedTags ? 'Edit' : 'Choose',
+                                actionLabel: _hasSelectedTags
+                                    ? 'Edit'
+                                    : 'Choose',
                                 onTap: _openTagsSelectorSheet,
                                 isPlaceholder: !_hasSelectedTags,
                                 footer: _hasSelectedTags
@@ -1390,9 +1382,9 @@ class _ManualAddCollectibleScreenState
                                           setState(() {
                                             _selectedBoxStatus =
                                                 _selectedBoxStatus ==
-                                                        option.value
-                                                    ? null
-                                                    : option.value;
+                                                    option.value
+                                                ? null
+                                                : option.value;
                                           });
                                         },
                                       ),
@@ -1617,17 +1609,13 @@ class _PhotoSection extends StatelessWidget {
     required this.selectedImage,
     this.existingPhotoUrl,
     this.lookupImageUrl,
-    required this.isFavorite,
     required this.onEditPhoto,
-    required this.onToggleFavorite,
   });
 
   final XFile? selectedImage;
   final String? existingPhotoUrl;
   final String? lookupImageUrl;
-  final bool isFavorite;
   final VoidCallback onEditPhoto;
-  final VoidCallback onToggleFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -1643,65 +1631,21 @@ class _PhotoSection extends StatelessWidget {
           existingPhotoUrl: existingPhotoUrl,
           lookupImageUrl: lookupImageUrl,
           height: 196,
+          onAddPhoto: hasPhoto ? null : onEditPhoto,
         ),
-        Positioned(
-          top: AppSpacing.md,
-          right: AppSpacing.md,
-          child: _PhotoOverlayIconButton(
-            icon: isFavorite
-                ? Icons.favorite_rounded
-                : Icons.favorite_border_rounded,
-            foregroundColor: isFavorite
-                ? AppColors.tertiary
-                : AppColors.onSurface,
-            onTap: onToggleFavorite,
-          ),
-        ),
-        Positioned(
-          right: AppSpacing.md,
-          bottom: AppSpacing.md,
-          child: _PhotoOverlayAction(
-            label: hasPhoto ? 'Update photo' : 'Add photo',
-            icon: hasPhoto ? Icons.edit_outlined : Icons.add_a_photo_outlined,
-            onTap: onEditPhoto,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _PhotoOverlayIconButton extends StatelessWidget {
-  const _PhotoOverlayIconButton({
-    required this.icon,
-    required this.onTap,
-    required this.foregroundColor,
-  });
-
-  final IconData icon;
-  final Color foregroundColor;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: Ink(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.48),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.12),
+        if (hasPhoto)
+          Positioned(
+            right: AppSpacing.md,
+            bottom: AppSpacing.md,
+            child: _PhotoOverlayAction(
+              label: 'Update photo',
+              icon: Icons.edit_outlined,
+              onTap: onEditPhoto,
             ),
-          ),
-          child: Icon(icon, size: 20, color: foregroundColor),
-        ),
-      ),
+          )
+        else
+          const SizedBox.shrink(),
+      ],
     );
   }
 }
@@ -1729,9 +1673,7 @@ class _PhotoOverlayAction extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.48),
             borderRadius: AppRadii.pill,
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.12),
-            ),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1740,9 +1682,9 @@ class _PhotoOverlayAction extends StatelessWidget {
               const SizedBox(width: AppSpacing.xs),
               Text(
                 label,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: Colors.white,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(color: Colors.white),
               ),
             ],
           ),
@@ -1758,12 +1700,14 @@ class _PhotoPreview extends StatelessWidget {
     this.existingPhotoUrl,
     this.lookupImageUrl,
     this.height = 220,
+    this.onAddPhoto,
   });
 
   final XFile? selectedImage;
   final String? existingPhotoUrl;
   final String? lookupImageUrl;
   final double height;
+  final VoidCallback? onAddPhoto;
 
   bool _isRemoteUrl(String value) {
     final parsed = Uri.tryParse(value);
@@ -1792,6 +1736,10 @@ class _PhotoPreview extends StatelessWidget {
     );
   }
 
+  Widget _buildEmptyState() {
+    return _PhotoPreviewEmpty(onAddPhoto: onAddPhoto);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1814,25 +1762,44 @@ class _PhotoPreview extends StatelessWidget {
             ? Image.network(
                 lookupImageUrl!,
                 fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => const _PhotoPreviewEmpty(),
+                errorBuilder: (_, _, _) => _buildEmptyState(),
               )
-            : const _PhotoPreviewEmpty(),
+            : _buildEmptyState(),
       ),
     );
   }
 }
 
 class _PhotoPreviewEmpty extends StatelessWidget {
-  const _PhotoPreviewEmpty();
+  const _PhotoPreviewEmpty({this.onAddPhoto});
+
+  final VoidCallback? onAddPhoto;
 
   @override
   Widget build(BuildContext context) {
-    return const Column(
+    return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(Icons.add_a_photo_outlined, size: 54, color: AppColors.primary),
-        SizedBox(height: AppSpacing.md),
-        Text('No photo selected yet', textAlign: TextAlign.center),
+        const Icon(
+          Icons.add_a_photo_outlined,
+          size: 54,
+          color: AppColors.primary,
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Text(
+          'No photo selected yet',
+          textAlign: TextAlign.center,
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(color: AppColors.onSurfaceVariant),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        if (onAddPhoto != null)
+          _PhotoOverlayAction(
+            label: 'Add photo',
+            icon: Icons.add_a_photo_outlined,
+            onTap: onAddPhoto!,
+          ),
       ],
     );
   }
@@ -2104,14 +2071,15 @@ class _SelectionField extends StatelessWidget {
                         value,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: (compact
-                                ? Theme.of(context).textTheme.titleMedium
-                                : Theme.of(context).textTheme.titleSmall)
-                            ?.copyWith(
-                          color: isPlaceholder
-                              ? AppColors.onSurfaceVariant
-                              : AppColors.onSurface,
-                        ),
+                        style:
+                            (compact
+                                    ? Theme.of(context).textTheme.titleMedium
+                                    : Theme.of(context).textTheme.titleSmall)
+                                ?.copyWith(
+                                  color: isPlaceholder
+                                      ? AppColors.onSurfaceVariant
+                                      : AppColors.onSurface,
+                                ),
                       ),
                       if (showHelper) ...[
                         const SizedBox(height: AppSpacing.xxs),
@@ -2119,11 +2087,12 @@ class _SelectionField extends StatelessWidget {
                           errorText ?? helperText,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: (errorText ?? '').isNotEmpty
-                                ? AppColors.error
-                                : AppColors.onSurfaceVariant,
-                          ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: (errorText ?? '').isNotEmpty
+                                    ? AppColors.error
+                                    : AppColors.onSurfaceVariant,
+                              ),
                         ),
                       ],
                     ],
@@ -2138,9 +2107,8 @@ class _SelectionField extends StatelessWidget {
                       if (showActionLabel) ...[
                         Text(
                           actionLabel,
-                          style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                            color: AppColors.primary,
-                          ),
+                          style: Theme.of(context).textTheme.labelLarge
+                              ?.copyWith(color: AppColors.primary),
                         ),
                         const SizedBox(width: AppSpacing.xxs),
                       ],

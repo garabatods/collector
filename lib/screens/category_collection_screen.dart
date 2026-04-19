@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../core/collector_haptics.dart';
 import '../core/data/archive_repository.dart';
 import '../core/data/archive_types.dart';
+import '../features/collection/data/models/collectible_detail_navigation_context.dart';
+import '../features/collection/data/repositories/collectible_photos_repository.dart';
+import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/add_item_method_sheet.dart';
@@ -11,6 +15,7 @@ import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_panel.dart';
+import '../widgets/collector_snack_bar.dart';
 import '../widgets/collector_skeleton.dart';
 import '../widgets/collector_sticky_back_button.dart';
 import 'ai_photo_identification_screen.dart';
@@ -35,6 +40,8 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
   static const _pageSize = 24;
 
   final _archiveRepository = ArchiveRepository.instance;
+  final _collectiblesRepository = CollectiblesRepository();
+  final _photosRepository = CollectiblePhotosRepository();
   final _scrollController = ScrollController();
 
   var _didChangeCollection = false;
@@ -46,7 +53,12 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
   var _visibleItemCount = _pageSize;
   var _knownResultCount = 0;
   var _isExpandingVisibleItems = false;
+  var _isDeletingSelection = false;
+  final Set<String> _selectedCollectibleIds = <String>{};
   late Stream<ArchiveLibraryPage> _stream;
+
+  bool get _isSelectionMode => _selectedCollectibleIds.isNotEmpty;
+  int get _selectedCount => _selectedCollectibleIds.length;
 
   @override
   void initState() {
@@ -85,6 +97,10 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
   }
 
   void _handleBack() {
+    if (_isSelectionMode) {
+      _exitSelectionMode();
+      return;
+    }
     Navigator.of(context).pop(_didChangeCollection);
   }
 
@@ -134,6 +150,7 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
   }
 
   void _clearRefinements() {
+    _exitSelectionMode();
     setState(() {
       _favoritesOnly = false;
       _grailsOnly = false;
@@ -211,6 +228,116 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
     }
   }
 
+  void _enterSelectionMode(String collectibleId) {
+    CollectorHaptics.medium();
+    setState(() {
+      _selectedCollectibleIds
+        ..clear()
+        ..add(collectibleId);
+    });
+  }
+
+  void _toggleSelection(String collectibleId) {
+    CollectorHaptics.selection();
+    setState(() {
+      if (_selectedCollectibleIds.contains(collectibleId)) {
+        _selectedCollectibleIds.remove(collectibleId);
+      } else {
+        _selectedCollectibleIds.add(collectibleId);
+      }
+    });
+  }
+
+  void _exitSelectionMode() {
+    if (_selectedCollectibleIds.isEmpty && !_isDeletingSelection) {
+      return;
+    }
+    setState(() {
+      _selectedCollectibleIds.clear();
+      _isDeletingSelection = false;
+    });
+  }
+
+  Future<void> _confirmDeleteSelection() async {
+    if (_selectedCollectibleIds.isEmpty || _isDeletingSelection) {
+      return;
+    }
+
+    final count = _selectedCollectibleIds.length;
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(count == 1 ? 'Delete item?' : 'Delete $count items?'),
+          content: Text(
+            count == 1
+                ? 'This removes it from this category and your collection.'
+                : 'This removes them from this category and your collection.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.error,
+                foregroundColor: AppColors.onPrimary,
+              ),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || shouldDelete != true) {
+      return;
+    }
+
+    setState(() {
+      _isDeletingSelection = true;
+    });
+
+    final idsToDelete = _selectedCollectibleIds.toList(growable: false);
+    try {
+      for (final collectibleId in idsToDelete) {
+        await _photosRepository.deleteAllForCollectible(collectibleId);
+        await _collectiblesRepository.delete(collectibleId);
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      CollectorHaptics.heavy();
+      CollectorSnackBar.show(
+        context,
+        message: count == 1
+            ? 'Item deleted from this category.'
+            : '$count items deleted from this category.',
+        tone: CollectorSnackBarTone.success,
+      );
+      _didChangeCollection = true;
+      _exitSelectionMode();
+      await _reload();
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isDeletingSelection = false;
+      });
+      CollectorSnackBar.show(
+        context,
+        message: 'Could not delete those items right now.',
+        tone: CollectorSnackBarTone.error,
+      );
+    }
+  }
+
   Future<void> _openAiPhotoIdFlow() async {
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
@@ -237,185 +364,254 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: const BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment.topCenter,
-                  radius: 1.2,
-                  colors: [AppColors.featureGlow, AppColors.background],
+    return PopScope(
+      canPop: !_isSelectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _isSelectionMode) {
+          _exitSelectionMode();
+        }
+      },
+      child: Scaffold(
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment.topCenter,
+                    radius: 1.2,
+                    colors: [AppColors.featureGlow, AppColors.background],
+                  ),
                 ),
               ),
             ),
-          ),
-          SafeArea(
-            child: ArchiveBootstrapGate(
-              child: StreamBuilder<ArchiveLibraryPage>(
-                stream: _stream,
-                builder: (context, snapshot) {
-                  final data = snapshot.data;
+            SafeArea(
+              child: ArchiveBootstrapGate(
+                child: StreamBuilder<ArchiveLibraryPage>(
+                  stream: _stream,
+                  builder: (context, snapshot) {
+                    final data = snapshot.data;
 
-                  if (snapshot.hasError && data == null) {
-                    return _CategoryCollectionErrorState(
-                      category: widget.category,
-                      onRetry: _reload,
-                    );
-                  }
+                    if (snapshot.hasError && data == null) {
+                      return _CategoryCollectionErrorState(
+                        category: widget.category,
+                        onRetry: _reload,
+                      );
+                    }
 
-                  if (data == null) {
-                    return const _CategoryCollectionLoadingState();
-                  }
+                    if (data == null) {
+                      return const _CategoryCollectionLoadingState();
+                    }
 
-                  _knownResultCount = data.totalCount;
-                  _isExpandingVisibleItems = false;
+                    _knownResultCount = data.totalCount;
+                    _isExpandingVisibleItems = false;
 
-                  if (data.totalCount == 0 && !_hasActiveRefinementState) {
+                    if (data.totalCount == 0 && !_hasActiveRefinementState) {
+                      return Stack(
+                        children: [
+                          _CategoryCollectionEmptyState(
+                            category: widget.category,
+                          ),
+                          if (!_isSelectionMode)
+                            _CategoryStickyAddButton(onTap: _openAddItemSheet),
+                        ],
+                      );
+                    }
+
+                    final contentBottomPadding = _isSelectionMode
+                        ? 196.0
+                        : 104.0;
+
                     return Stack(
                       children: [
-                        _CategoryCollectionEmptyState(
-                          category: widget.category,
+                        CustomScrollView(
+                          controller: _scrollController,
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  AppSpacing.md,
+                                  AppSpacing.md,
+                                  AppSpacing.md,
+                                  AppSpacing.lg,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const SizedBox(height: 48),
+                                    const SizedBox(height: AppSpacing.lg),
+                                    _CategoryPageTitle(
+                                      category: widget.category,
+                                    ),
+                                    const SizedBox(height: AppSpacing.lg),
+                                    _CategoryBrowseControls(
+                                      count: data.totalCount,
+                                      totalCount: data.totalCount,
+                                      viewMode: _viewMode,
+                                      refineHighlighted:
+                                          _hasActiveRefinementState,
+                                      onViewModeChanged: (viewMode) {
+                                        setState(() {
+                                          _viewMode = viewMode;
+                                        });
+                                      },
+                                      onRefineTap: _openRefineSheet,
+                                    ),
+                                    if (data.items.isEmpty) ...[
+                                      const SizedBox(height: AppSpacing.lg),
+                                      _EmptyFilterResultsPanel(
+                                        onClearFilters: _clearRefinements,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                            if (data.items.isNotEmpty)
+                              if (_viewMode == _CategoryViewMode.grid)
+                                SliverPadding(
+                                  padding: EdgeInsets.fromLTRB(
+                                    AppSpacing.md,
+                                    0,
+                                    AppSpacing.md,
+                                    contentBottomPadding,
+                                  ),
+                                  sliver: SliverGrid(
+                                    delegate: SliverChildBuilderDelegate((
+                                      context,
+                                      index,
+                                    ) {
+                                      final collectible = data.items[index];
+                                      final id = collectible.id;
+                                      final photoRef = id == null
+                                          ? null
+                                          : data.photoRefsByCollectibleId[id];
+
+                                      return CollectibleGridCard(
+                                        collectible: collectible,
+                                        photoRef: photoRef,
+                                        onCollectionChanged: _reload,
+                                        detailNavigationContext:
+                                            CollectibleDetailNavigationContext.fromCollectibles(
+                                              source: CollectibleDetailSource
+                                                  .category,
+                                              collectibles: data.items,
+                                              currentCollectible: collectible,
+                                              categoryLabel: widget.category,
+                                            ),
+                                        selectionMode: _isSelectionMode,
+                                        selected:
+                                            id != null &&
+                                            _selectedCollectibleIds.contains(
+                                              id,
+                                            ),
+                                        onSelectionTap: id == null
+                                            ? null
+                                            : () => _toggleSelection(id),
+                                        onLongPressSelection: id == null
+                                            ? null
+                                            : () => _isSelectionMode
+                                                  ? _toggleSelection(id)
+                                                  : _enterSelectionMode(id),
+                                      );
+                                    }, childCount: data.items.length),
+                                    gridDelegate:
+                                        const SliverGridDelegateWithFixedCrossAxisCount(
+                                          crossAxisCount: 3,
+                                          crossAxisSpacing: AppSpacing.sm,
+                                          mainAxisSpacing: AppSpacing.md,
+                                          childAspectRatio: 0.72,
+                                        ),
+                                  ),
+                                )
+                              else
+                                SliverPadding(
+                                  padding: EdgeInsets.fromLTRB(
+                                    AppSpacing.md,
+                                    0,
+                                    AppSpacing.md,
+                                    contentBottomPadding,
+                                  ),
+                                  sliver: SliverList.separated(
+                                    itemCount: data.items.length,
+                                    separatorBuilder: (_, _) =>
+                                        const SizedBox(height: AppSpacing.xs),
+                                    itemBuilder: (context, index) {
+                                      final collectible = data.items[index];
+                                      final id = collectible.id;
+                                      final photoRef = id == null
+                                          ? null
+                                          : data.photoRefsByCollectibleId[id];
+
+                                      return CollectibleListCard(
+                                        collectible: collectible,
+                                        photoRef: photoRef,
+                                        onCollectionChanged: _reload,
+                                        detailNavigationContext:
+                                            CollectibleDetailNavigationContext.fromCollectibles(
+                                              source: CollectibleDetailSource
+                                                  .category,
+                                              collectibles: data.items,
+                                              currentCollectible: collectible,
+                                              categoryLabel: widget.category,
+                                            ),
+                                        selectionMode: _isSelectionMode,
+                                        selected:
+                                            id != null &&
+                                            _selectedCollectibleIds.contains(
+                                              id,
+                                            ),
+                                        onSelectionTap: id == null
+                                            ? null
+                                            : () => _toggleSelection(id),
+                                        onLongPressSelection: id == null
+                                            ? null
+                                            : () => _isSelectionMode
+                                                  ? _toggleSelection(id)
+                                                  : _enterSelectionMode(id),
+                                      );
+                                    },
+                                  ),
+                                ),
+                            if (data.items.isNotEmpty && data.hasMore)
+                              SliverToBoxAdapter(
+                                child: Padding(
+                                  padding: EdgeInsets.fromLTRB(
+                                    AppSpacing.md,
+                                    AppSpacing.md,
+                                    AppSpacing.md,
+                                    contentBottomPadding,
+                                  ),
+                                  child: const _InlineCategoryLoader(
+                                    label: 'Scroll to load more...',
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                        _CategoryStickyAddButton(onTap: _openAddItemSheet),
+                        if (!_isSelectionMode)
+                          _CategoryStickyAddButton(onTap: _openAddItemSheet),
+                        if (_isSelectionMode)
+                          Positioned(
+                            left: AppSpacing.md,
+                            right: AppSpacing.md,
+                            bottom: AppSpacing.md,
+                            child: _CategoryBulkDeleteBar(
+                              selectedCount: _selectedCount,
+                              isDeleting: _isDeletingSelection,
+                              onClose: _exitSelectionMode,
+                              onDelete: _confirmDeleteSelection,
+                            ),
+                          ),
                       ],
                     );
-                  }
-
-                  return Stack(
-                    children: [
-                      CustomScrollView(
-                        controller: _scrollController,
-                        slivers: [
-                          SliverToBoxAdapter(
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(
-                                AppSpacing.md,
-                                AppSpacing.md,
-                                AppSpacing.md,
-                                AppSpacing.lg,
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const SizedBox(height: 48),
-                                  const SizedBox(height: AppSpacing.lg),
-                                  _CategoryPageTitle(category: widget.category),
-                                  const SizedBox(height: AppSpacing.lg),
-                                  _CategoryBrowseControls(
-                                    count: data.totalCount,
-                                    totalCount: data.totalCount,
-                                    viewMode: _viewMode,
-                                    refineHighlighted:
-                                        _hasActiveRefinementState,
-                                    onViewModeChanged: (viewMode) {
-                                      setState(() {
-                                        _viewMode = viewMode;
-                                      });
-                                    },
-                                    onRefineTap: _openRefineSheet,
-                                  ),
-                                  if (data.items.isEmpty) ...[
-                                    const SizedBox(height: AppSpacing.lg),
-                                    _EmptyFilterResultsPanel(
-                                      onClearFilters: _clearRefinements,
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ),
-                          if (data.items.isNotEmpty)
-                            if (_viewMode == _CategoryViewMode.grid)
-                              SliverPadding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  AppSpacing.md,
-                                  0,
-                                  AppSpacing.md,
-                                  AppSpacing.lg,
-                                ),
-                                sliver: SliverGrid(
-                                  delegate: SliverChildBuilderDelegate((
-                                    context,
-                                    index,
-                                  ) {
-                                    final collectible = data.items[index];
-                                    final id = collectible.id;
-                                    final photoRef = id == null
-                                        ? null
-                                        : data.photoRefsByCollectibleId[id];
-
-                                    return CollectibleGridCard(
-                                      collectible: collectible,
-                                      photoRef: photoRef,
-                                      onCollectionChanged: _reload,
-                                    );
-                                  }, childCount: data.items.length),
-                                  gridDelegate:
-                                      const SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: 3,
-                                        crossAxisSpacing: AppSpacing.sm,
-                                        mainAxisSpacing: AppSpacing.md,
-                                        childAspectRatio: 0.72,
-                                      ),
-                                ),
-                              )
-                            else
-                              SliverPadding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  AppSpacing.md,
-                                  0,
-                                  AppSpacing.md,
-                                  AppSpacing.lg,
-                                ),
-                                sliver: SliverList.separated(
-                                  itemCount: data.items.length,
-                                  separatorBuilder: (_, _) =>
-                                      const SizedBox(height: AppSpacing.xs),
-                                  itemBuilder: (context, index) {
-                                    final collectible = data.items[index];
-                                    final id = collectible.id;
-                                    final photoRef = id == null
-                                        ? null
-                                        : data.photoRefsByCollectibleId[id];
-
-                                    return CollectibleListCard(
-                                      collectible: collectible,
-                                      photoRef: photoRef,
-                                      onCollectionChanged: _reload,
-                                    );
-                                  },
-                                ),
-                              ),
-                          if (data.items.isNotEmpty && data.hasMore)
-                            const SliverToBoxAdapter(
-                              child: Padding(
-                                padding: EdgeInsets.fromLTRB(
-                                  AppSpacing.md,
-                                  AppSpacing.md,
-                                  AppSpacing.md,
-                                  AppSpacing.lg,
-                                ),
-                                child: _InlineCategoryLoader(
-                                  label: 'Scroll to load more...',
-                                ),
-                              ),
-                            ),
-                          const SliverToBoxAdapter(
-                            child: SizedBox(height: 104),
-                          ),
-                        ],
-                      ),
-                      _CategoryStickyAddButton(onTap: _openAddItemSheet),
-                    ],
-                  );
-                },
+                  },
+                ),
               ),
             ),
-          ),
-          CollectorStickyBackButton(onPressed: _handleBack),
-        ],
+            CollectorStickyBackButton(onPressed: _handleBack),
+          ],
+        ),
       ),
     );
   }
@@ -484,6 +680,109 @@ class _CategoryAddItemSheet extends StatelessWidget {
       onScanBarcode: onScanBarcode,
       onIdentifyWithAi: onIdentifyWithAi,
       onAddManually: onAddManually,
+    );
+  }
+}
+
+class _CategoryBulkDeleteBar extends StatelessWidget {
+  const _CategoryBulkDeleteBar({
+    required this.selectedCount,
+    required this.isDeleting,
+    required this.onClose,
+    required this.onDelete,
+  });
+
+  final int selectedCount;
+  final bool isDeleting;
+  final VoidCallback onClose;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final actionSize = isDeleting ? 44.0 : 48.0;
+
+    return CollectorPanel(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      backgroundColor: AppColors.surfaceContainerHigh.withValues(alpha: 0.96),
+      child: Row(
+        children: [
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: isDeleting ? null : onClose,
+              borderRadius: BorderRadius.circular(16),
+              child: Ink(
+                width: actionSize,
+                height: actionSize,
+                decoration: BoxDecoration(
+                  color: isDeleting
+                      ? AppColors.surfaceContainerHighest.withValues(
+                          alpha: 0.28,
+                        )
+                      : AppColors.primary.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: isDeleting
+                        ? AppColors.outlineVariant.withValues(alpha: 0.18)
+                        : AppColors.primary.withValues(alpha: 0.26),
+                  ),
+                ),
+                child: Icon(
+                  Icons.close_rounded,
+                  size: 20,
+                  color: isDeleting
+                      ? AppColors.onSurfaceVariant
+                      : AppColors.primary,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Text(
+              selectedCount == 1
+                  ? '1 Item Selected'
+                  : '$selectedCount Items Selected',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: isDeleting ? null : onDelete,
+              borderRadius: BorderRadius.circular(16),
+              child: Ink(
+                width: actionSize,
+                height: actionSize,
+                decoration: BoxDecoration(
+                  color: AppColors.error,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Center(
+                  child: isDeleting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppColors.onPrimary,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.delete_outline_rounded,
+                          size: 20,
+                          color: AppColors.onPrimary,
+                        ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1124,9 +1423,7 @@ class _CategoryCollectionLoadingState extends StatelessWidget {
                           borderRadius: BorderRadius.all(Radius.circular(12)),
                         ),
                         SizedBox(width: AppSpacing.md),
-                        Expanded(
-                          child: CollectorSkeletonBlock(height: 34),
-                        ),
+                        Expanded(child: CollectorSkeletonBlock(height: 34)),
                       ],
                     ),
                     SizedBox(height: AppSpacing.lg),

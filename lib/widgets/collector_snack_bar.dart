@@ -40,9 +40,9 @@ abstract final class CollectorSnackBar {
           padding: EdgeInsets.zero,
           margin: const EdgeInsets.fromLTRB(
             AppSpacing.md,
-            0,
+            92,
             AppSpacing.md,
-            112,
+            0,
           ),
           content: _CollectorSnackBarContent(
             message: message,

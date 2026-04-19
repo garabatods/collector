@@ -16,8 +16,8 @@ class ArchiveRepository {
   ArchiveRepository._({
     required LocalArchiveDatabase database,
     required ArchiveSyncCoordinator syncCoordinator,
-  })  : _database = database,
-        _syncCoordinator = syncCoordinator;
+  }) : _database = database,
+       _syncCoordinator = syncCoordinator;
 
   static final ArchiveRepository instance = ArchiveRepository._(
     database: LocalArchiveDatabase.instance,
@@ -29,7 +29,8 @@ class ArchiveRepository {
 
   ValueNotifier<SyncStatus> get syncStatus => _syncCoordinator.status;
 
-  Future<void> initializeForCurrentUser() => _syncCoordinator.initializeForCurrentUser();
+  Future<void> initializeForCurrentUser() =>
+      _syncCoordinator.initializeForCurrentUser();
 
   Future<void> handleAppResumed() => _syncCoordinator.handleAppResumed();
 
@@ -85,6 +86,7 @@ class ArchiveRepository {
             grailsOnly: filters.grailsOnly,
             duplicatesOnly: filters.duplicatesOnly,
             hasPhotoOnly: filters.hasPhotoOnly,
+            missingPhotoOnly: filters.missingPhotoOnly,
           ),
           photoRefs: photoRefs,
         );
@@ -145,12 +147,14 @@ class ArchiveRepository {
       _watchPrimaryPhotoRefs(userId),
       (List<CollectibleModel> items, Map<String, ArchivePhotoRef> photoRefs) {
         final normalizedCategory = category.trim().toLowerCase();
-        final filtered = items
-            .where(
-              (item) => item.category.trim().toLowerCase() == normalizedCategory,
-            )
-            .toList(growable: false)
-          ..sort(_compareDateDesc);
+        final filtered =
+            items
+                .where(
+                  (item) =>
+                      item.category.trim().toLowerCase() == normalizedCategory,
+                )
+                .toList(growable: false)
+              ..sort(_compareDateDesc);
         return ArchiveCategoryCollection(
           collectibles: filtered,
           photoRefsByCollectibleId: photoRefs,
@@ -159,7 +163,9 @@ class ArchiveRepository {
     );
   }
 
-  Stream<ArchiveCollectibleDetail?> watchCollectibleDetail(String collectibleId) {
+  Stream<ArchiveCollectibleDetail?> watchCollectibleDetail(
+    String collectibleId,
+  ) {
     final userId = _requireUserId();
     return Rx.combineLatest2(
       _database.watchCollectibleById(userId, collectibleId),
@@ -190,34 +196,62 @@ class ArchiveRepository {
         Map<String, ArchivePhotoRef> photoRefs,
       ) {
         final categoryCounts = <String, int>{};
+        final franchiseCounts = <String, int>{};
         for (final item in collectibles) {
           final category = item.category.trim();
           if (category.isEmpty) {
             continue;
           }
-          categoryCounts.update(category, (value) => value + 1, ifAbsent: () => 1);
+          categoryCounts.update(
+            category,
+            (value) => value + 1,
+            ifAbsent: () => 1,
+          );
+
+          final franchise = (item.franchise ?? '').trim();
+          if (franchise.isNotEmpty) {
+            franchiseCounts.update(
+              franchise,
+              (value) => value + 1,
+              ifAbsent: () => 1,
+            );
+          }
         }
 
         final sortedCollectibles = [...collectibles]..sort(_compareDateDesc);
-        final latestItem = sortedCollectibles.isEmpty ? null : sortedCollectibles.first;
+        final latestItem = sortedCollectibles.isEmpty
+            ? null
+            : sortedCollectibles.first;
         final favoriteCategory = _pickFavoriteCategory(categoryCounts);
+        final topCategoryItemCount = _highestCount(categoryCounts);
+        final topFranchiseItemCount = _highestCount(franchiseCounts);
         final featuredItem = _pickFeaturedItem(
           sortedCollectibles,
           topCategory: favoriteCategory,
         );
 
         final currentUser = Supabase.instance.client.auth.currentUser;
+        final photoCount = collectibles
+            .where(
+              (item) =>
+                  item.id != null && (photoRefs[item.id!]?.hasImage ?? false),
+            )
+            .length;
         return ArchiveProfileSummary(
           profile: profile,
           email: currentUser?.email,
           totalItems: collectibles.length,
           categoryCount: categoryCounts.length,
           favoriteCount: collectibles.where((item) => item.isFavorite).length,
+          photoCount: photoCount,
+          topCategoryItemCount: topCategoryItemCount,
+          topFranchiseItemCount: topFranchiseItemCount,
           wishlistCount: wishlistItems.length,
           latestItem: latestItem,
           featuredItem: featuredItem,
-          featuredPhotoRef:
-              featuredItem?.id == null ? null : photoRefs[featuredItem!.id!],
+          featuredPhotoRef: featuredItem?.id == null
+              ? null
+              : photoRefs[featuredItem!.id!],
           favoriteCategory: favoriteCategory,
         );
       },
@@ -226,9 +260,9 @@ class ArchiveRepository {
 
   Stream<ArchiveWishlistSummary> watchWishlistSummary() {
     final userId = _requireUserId();
-    return _database.watchWishlistItems(userId).map(
-          (items) => ArchiveWishlistSummary(items: items),
-        );
+    return _database
+        .watchWishlistItems(userId)
+        .map((items) => ArchiveWishlistSummary(items: items));
   }
 
   Stream<Map<String, ArchivePhotoRef>> _watchPrimaryPhotoRefs(String userId) {
@@ -251,9 +285,12 @@ class ArchiveRepository {
         };
         final result = <String, ArchivePhotoRef>{};
         for (final photo in primaryPhotos.values) {
-          final cacheEntry = photo.id == null ? null : cacheByPhotoId[photo.id!];
+          final cacheEntry = photo.id == null
+              ? null
+              : cacheByPhotoId[photo.id!];
           final remoteUrlExpiresAt = cacheEntry?.remoteUrlExpiresAt;
-          final remoteUrl = remoteUrlExpiresAt != null &&
+          final remoteUrl =
+              remoteUrlExpiresAt != null &&
                   remoteUrlExpiresAt.isAfter(DateTime.now())
               ? cacheEntry?.remoteUrl
               : null;
@@ -316,32 +353,38 @@ class ArchiveRepository {
         .toList(growable: false);
     final normalizedCategory = filters.category?.trim().toLowerCase();
 
-    final filtered = items.where((item) {
-      if (filters.favoritesOnly && !item.isFavorite) {
-        return false;
-      }
-      if (filters.grailsOnly && !item.isGrail) {
-        return false;
-      }
-      if (filters.duplicatesOnly && !item.isDuplicate) {
-        return false;
-      }
-      if (filters.hasPhotoOnly) {
-        final photoRef = item.id == null ? null : photoRefs[item.id!];
-        if (!(photoRef?.hasImage ?? false)) {
-          return false;
-        }
-      }
-      if (normalizedCategory != null &&
-          normalizedCategory.isNotEmpty &&
-          item.category.trim().toLowerCase() != normalizedCategory) {
-        return false;
-      }
-      if (queryTerms.isEmpty) {
-        return true;
-      }
-      return _matchesQuery(item, queryTerms);
-    }).toList(growable: false);
+    final filtered = items
+        .where((item) {
+          if (filters.favoritesOnly && !item.isFavorite) {
+            return false;
+          }
+          if (filters.grailsOnly && !item.isGrail) {
+            return false;
+          }
+          if (filters.duplicatesOnly && !item.isDuplicate) {
+            return false;
+          }
+          if (filters.hasPhotoOnly || filters.missingPhotoOnly) {
+            final photoRef = item.id == null ? null : photoRefs[item.id!];
+            final hasPhoto = photoRef?.hasImage ?? false;
+            if (filters.hasPhotoOnly && !hasPhoto) {
+              return false;
+            }
+            if (filters.missingPhotoOnly && hasPhoto) {
+              return false;
+            }
+          }
+          if (normalizedCategory != null &&
+              normalizedCategory.isNotEmpty &&
+              item.category.trim().toLowerCase() != normalizedCategory) {
+            return false;
+          }
+          if (queryTerms.isEmpty) {
+            return true;
+          }
+          return _matchesQuery(item, queryTerms);
+        })
+        .toList(growable: false);
 
     filtered.sort((a, b) {
       switch (sort) {
@@ -352,13 +395,16 @@ class ArchiveRepository {
         case ArchiveLibrarySort.titleDescending:
           return b.title.toLowerCase().compareTo(a.title.toLowerCase());
         case ArchiveLibrarySort.category:
-          final byCategory = a.category.toLowerCase().compareTo(b.category.toLowerCase());
+          final byCategory = a.category.toLowerCase().compareTo(
+            b.category.toLowerCase(),
+          );
           return byCategory == 0 ? _compareDateDesc(a, b) : byCategory;
         case ArchiveLibrarySort.relevance:
           if (queryTerms.isEmpty) {
             return _compareDateDesc(a, b);
           }
-          final scoreDelta = _scoreItem(b, queryTerms) - _scoreItem(a, queryTerms);
+          final scoreDelta =
+              _scoreItem(b, queryTerms) - _scoreItem(a, queryTerms);
           return scoreDelta == 0 ? _compareDateDesc(a, b) : scoreDelta;
         case ArchiveLibrarySort.newest:
           return _compareDateDesc(a, b);
@@ -393,7 +439,9 @@ class ArchiveRepository {
     final brand = (item.brand ?? '').toLowerCase();
     final series = (item.lineOrSeries ?? item.series ?? '').toLowerCase();
     final franchise = (item.franchise ?? '').toLowerCase();
-    final tagNames = item.tags.map((tag) => tag.name.toLowerCase()).toList(growable: false);
+    final tagNames = item.tags
+        .map((tag) => tag.name.toLowerCase())
+        .toList(growable: false);
 
     for (final term in queryTerms) {
       if (title.contains(term)) score += 60;
@@ -410,14 +458,18 @@ class ArchiveRepository {
   }
 
   int _compareDateDesc(CollectibleModel a, CollectibleModel b) {
-    final aDate = a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final bDate = b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final aDate =
+        a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bDate =
+        b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
     return bDate.compareTo(aDate);
   }
 
   int _compareDateAsc(CollectibleModel a, CollectibleModel b) {
-    final aDate = a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final bDate = b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final aDate =
+        a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bDate =
+        b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
     return aDate.compareTo(bDate);
   }
 
@@ -433,6 +485,15 @@ class ArchiveRepository {
     return entries.first.key;
   }
 
+  int _highestCount(Map<String, int> counts) {
+    if (counts.isEmpty) {
+      return 0;
+    }
+    return counts.values.reduce(
+      (current, next) => current > next ? current : next,
+    );
+  }
+
   CollectibleModel? _pickFeaturedItem(
     List<CollectibleModel> items, {
     String? topCategory,
@@ -443,7 +504,10 @@ class ArchiveRepository {
     if (topCategory != null && topCategory.trim().isNotEmpty) {
       final normalizedTopCategory = topCategory.trim().toLowerCase();
       final topCategoryItems = items
-          .where((item) => item.category.trim().toLowerCase() == normalizedTopCategory)
+          .where(
+            (item) =>
+                item.category.trim().toLowerCase() == normalizedTopCategory,
+          )
           .toList(growable: false);
       for (final item in topCategoryItems) {
         if (item.isFavorite) {
