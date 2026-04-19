@@ -43,6 +43,7 @@ class CollectionHomeScreen extends StatefulWidget {
   const CollectionHomeScreen({
     super.key,
     required this.isSupabaseConfigured,
+    required this.isActive,
     required this.refreshSeed,
     required this.onAddFirstItem,
     required this.onScanItem,
@@ -54,6 +55,7 @@ class CollectionHomeScreen extends StatefulWidget {
   });
 
   final bool isSupabaseConfigured;
+  final bool isActive;
   final int refreshSeed;
   final VoidCallback onAddFirstItem;
   final VoidCallback onScanItem;
@@ -133,6 +135,7 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
               children: [
                 _LoadedHomeState(
                   data: data,
+                  isActive: widget.isActive,
                   collectibles: data.collectibles,
                   onCollectionChanged: _reload,
                   onAddFirstItem: widget.onAddFirstItem,
@@ -154,6 +157,7 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
 class _LoadedHomeState extends StatefulWidget {
   const _LoadedHomeState({
     required this.data,
+    required this.isActive,
     required this.collectibles,
     required this.onCollectionChanged,
     required this.onAddFirstItem,
@@ -165,6 +169,7 @@ class _LoadedHomeState extends StatefulWidget {
   });
 
   final ArchiveHomeSummary data;
+  final bool isActive;
   final List<CollectibleModel> collectibles;
   final Future<void> Function() onCollectionChanged;
   final VoidCallback onAddFirstItem;
@@ -189,14 +194,16 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
   HomeCollectionInsight? _selectedInsight;
   List<CollectorGoal> _collectorGoals = const [];
   bool _isResolvingInsight = true;
-  String? _lastGamificationSignature;
+  String? _pendingGamificationSignature;
 
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
     _loadInsightHistory();
-    _syncGamification();
+    if (widget.isActive) {
+      _syncGamification();
+    }
   }
 
   @override
@@ -211,7 +218,8 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
     if (oldWidget.data != widget.data && _insightHistory != null) {
       _resolveInsight();
     }
-    if (oldWidget.data != widget.data) {
+    if (widget.isActive &&
+        (oldWidget.data != widget.data || !oldWidget.isActive)) {
       _syncGamification();
     }
     if ((oldWidget.scrollRequest ?? 0) != (widget.scrollRequest ?? 0) &&
@@ -551,30 +559,34 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
 
   Future<void> _syncGamification() async {
     final progress = CollectorProgressSnapshot.fromHomeSummary(widget.data);
-    final signature = CollectorBadgeEngine.buildSignature(progress);
-    if (_lastGamificationSignature == signature) {
+    final progressSignature = CollectorBadgeEngine.buildSignature(progress);
+    if (_pendingGamificationSignature == progressSignature) {
       return;
     }
+    _pendingGamificationSignature = progressSignature;
 
-    final unlockedBadges = CollectorBadgeEngine.unlockedBadges(progress);
-    final syncResult = await _badgeAwardStore.syncUnlocked(unlockedBadges);
-    if (!mounted) {
-      return;
-    }
+    try {
+      final unlockedBadges = CollectorBadgeEngine.unlockedBadges(progress);
+      final syncResult = await _badgeAwardStore.syncUnlocked(unlockedBadges);
+      if (!mounted) {
+        return;
+      }
 
-    final awards = syncResult.awards;
-    final earnedBadgeIds = awards.map((award) => award.badge.id).toSet();
-    final goals = CollectorGoalEngine.buildGoals(
-      summary: widget.data,
-      earnedBadgeIds: earnedBadgeIds,
-    );
+      final awards = syncResult.awards;
+      final earnedBadgeIds = awards.map((award) => award.badge.id).toSet();
+      final goals = CollectorGoalEngine.buildGoals(
+        summary: widget.data,
+        earnedBadgeIds: earnedBadgeIds,
+      );
 
-    setState(() {
-      _lastGamificationSignature = signature;
-      _collectorGoals = goals;
-    });
+      setState(() {
+        _collectorGoals = goals;
+      });
 
-    if (syncResult.newAwards.isNotEmpty) {
+      if (!widget.isActive || syncResult.newAwards.isEmpty) {
+        return;
+      }
+
       CollectorHaptics.medium();
       await showModalBottomSheet<void>(
         context: context,
@@ -586,6 +598,10 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
           onPrimaryAction: widget.onOpenProfile,
         ),
       );
+    } finally {
+      if (_pendingGamificationSignature == progressSignature) {
+        _pendingGamificationSignature = null;
+      }
     }
   }
 

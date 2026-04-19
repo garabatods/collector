@@ -266,6 +266,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     return [
       CollectionHomeScreen(
         isSupabaseConfigured: widget.isSupabaseConfigured,
+        isActive: _selectedTab == _DashboardTab.home,
         refreshSeed: _refreshSeed,
         onAddFirstItem: _openManualAddFlow,
         onScanItem: _openScannerFlow,
@@ -309,6 +310,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       SafeArea(
         bottom: false,
         child: CollectionProfileScreen(
+          isActive: _selectedTab == _DashboardTab.profile,
           refreshSeed: _refreshSeed,
           onProfileChanged: _refreshCollectionViews,
           onAddItem: _openManualAddFlow,

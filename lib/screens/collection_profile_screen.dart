@@ -33,6 +33,7 @@ import 'collectible_detail_screen.dart';
 class CollectionProfileScreen extends StatefulWidget {
   const CollectionProfileScreen({
     super.key,
+    required this.isActive,
     required this.refreshSeed,
     required this.onProfileChanged,
     required this.onAddItem,
@@ -42,6 +43,7 @@ class CollectionProfileScreen extends StatefulWidget {
     required this.onSignOut,
   });
 
+  final bool isActive;
   final int refreshSeed;
   final VoidCallback onProfileChanged;
   final VoidCallback onAddItem;
@@ -341,7 +343,9 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
             return const CollectorLoadingOverlay();
           }
 
-          _scheduleBadgeSync(snapshot.data!);
+          if (widget.isActive) {
+            _scheduleBadgeSync(snapshot.data!);
+          }
           final badgeProgress = CollectorProgressSnapshot.fromProfileSummary(
             snapshot.data!,
           );
@@ -462,6 +466,9 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
       setState(() {
         _badgeAwards = syncResult.awards;
       });
+      if (!widget.isActive) {
+        return;
+      }
       if (syncResult.newAwards.isNotEmpty) {
         CollectorHaptics.medium();
         await showModalBottomSheet<void>(
@@ -481,7 +488,9 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
   Future<void> _maybeShowCollectorStatusIntro(
     ArchiveProfileSummary summary,
   ) async {
-    if (_hasAttemptedCollectorStatusIntro || summary.totalItems <= 0) {
+    if (!widget.isActive ||
+        _hasAttemptedCollectorStatusIntro ||
+        summary.totalItems <= 0) {
       return;
     }
 
