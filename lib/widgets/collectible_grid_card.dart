@@ -486,32 +486,26 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Flexible(
-                      flex: 3,
-                      child: Text(
-                        widget.collectible.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
+                    Text(
+                      widget.collectible.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelLarge,
                     ),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      flex: 2,
-                      child: Text(
-                        widget.collectible.category.toUpperCase(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: AppColors.onSurfaceVariant.withValues(
-                            alpha: 0.64,
-                          ),
-                          fontSize: 9,
-                          letterSpacing: 0.75,
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.collectible.category,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceVariant.withValues(
+                          alpha: 0.72,
                         ),
+                        fontSize: 10,
                       ),
                     ),
                   ],

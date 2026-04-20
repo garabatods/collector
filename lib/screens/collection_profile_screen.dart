@@ -16,11 +16,9 @@ import '../features/profile/data/repositories/profile_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
-import '../widgets/archive_photo_view.dart';
 import '../widgets/collector_badge_unlock_sheet.dart';
 import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collector_button.dart';
-import '../widgets/collector_chip.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/collector_snack_bar.dart';
@@ -28,7 +26,6 @@ import '../widgets/collector_status_intro_sheet.dart';
 import '../widgets/collector_text_field.dart';
 import '../widgets/resolved_avatar_image.dart';
 import 'all_categories_screen.dart';
-import 'collectible_detail_screen.dart';
 
 class CollectionProfileScreen extends StatefulWidget {
   const CollectionProfileScreen({
@@ -97,25 +94,6 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
 
   Future<void> _reload() async {
     await _archiveRepository.syncIfNeeded(force: true);
-  }
-
-  Future<void> _openFeaturedItem(_ProfileScreenData data) async {
-    final featuredItem = data.featuredItem;
-    if (featuredItem == null) return;
-
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => CollectibleDetailScreen(
-          collectible: featuredItem,
-          photoRef: data.featuredPhotoRef,
-        ),
-      ),
-    );
-
-    if (changed == true) {
-      widget.onProfileChanged();
-      await _reload();
-    }
   }
 
   Future<void> _openAllCategories() async {
@@ -409,18 +387,6 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
                             },
                             onBadgeTap: (entry) =>
                                 _openBadgeDetail(entry, badgeProgress),
-                          ),
-                          const SizedBox(height: AppSpacing.lg),
-                          const _ProfileSectionTitle(
-                            title: 'Collector Highlight',
-                            subtitle:
-                                'A quick read on what defines your shelf right now.',
-                          ),
-                          const SizedBox(height: AppSpacing.sm),
-                          _CollectorHighlightPanel(
-                            data: data,
-                            onOpenFeaturedItem: () => _openFeaturedItem(data),
-                            onAddItem: widget.onAddItem,
                           ),
                           const SizedBox(height: AppSpacing.lg),
                           const _ProfileSectionTitle(
@@ -1010,189 +976,6 @@ class _BadgesSection extends StatelessWidget {
               },
             ),
         ],
-      ),
-    );
-  }
-}
-
-class _CollectorHighlightPanel extends StatelessWidget {
-  const _CollectorHighlightPanel({
-    required this.data,
-    required this.onOpenFeaturedItem,
-    required this.onAddItem,
-  });
-
-  final _ProfileScreenData data;
-  final VoidCallback onOpenFeaturedItem;
-  final VoidCallback onAddItem;
-
-  @override
-  Widget build(BuildContext context) {
-    if (data.totalItems == 0) {
-      return CollectorPanel(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.94),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Start building your shelf',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              'Once you add your first collectible, this space can spotlight a favorite piece, the category you collect most, or the latest addition worth showing off.',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppColors.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            CollectorButton(label: 'Add First Item', onPressed: onAddItem),
-          ],
-        ),
-      );
-    }
-
-    final featured = data.featuredItem;
-    if (featured == null) {
-      return const SizedBox.shrink();
-    }
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onOpenFeaturedItem,
-        borderRadius: BorderRadius.circular(30),
-        child: Ink(
-          decoration: BoxDecoration(
-            color: AppColors.surfaceContainer.withValues(alpha: 0.94),
-            borderRadius: BorderRadius.circular(30),
-            border: Border.all(
-              color: AppColors.outlineVariant.withValues(alpha: 0.16),
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(24),
-                  child: SizedBox(
-                    height: 180,
-                    width: double.infinity,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ArchivePhotoView(
-                          photoRef: data.featuredPhotoRef,
-                          fit: BoxFit.cover,
-                          placeholder: DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [
-                                  AppColors.primary.withValues(alpha: 0.22),
-                                  AppColors.surfaceContainerHighest,
-                                  AppColors.surfaceContainerLow,
-                                ],
-                              ),
-                            ),
-                            child: const Center(
-                              child: Icon(
-                                Icons.collections_bookmark_outlined,
-                                size: 42,
-                                color: AppColors.onSurfaceVariant,
-                              ),
-                            ),
-                          ),
-                          error: const Center(
-                            child: Icon(
-                              Icons.broken_image_outlined,
-                              size: 36,
-                              color: AppColors.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                        const DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [Color(0x0D0B0E14), Color(0xE60B0E14)],
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          left: AppSpacing.md,
-                          right: AppSpacing.md,
-                          bottom: AppSpacing.md,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                data.favoriteCategory != null &&
-                                        featured.category
-                                                .trim()
-                                                .toLowerCase() ==
-                                            data.favoriteCategory!
-                                                .trim()
-                                                .toLowerCase()
-                                    ? 'Spotlight from your top category'
-                                    : featured.isFavorite
-                                    ? 'Featured on your shelf'
-                                    : 'Latest shelf addition',
-                                style: Theme.of(context).textTheme.labelLarge
-                                    ?.copyWith(color: AppColors.primary),
-                              ),
-                              const SizedBox(height: AppSpacing.xs),
-                              Text(
-                                featured.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(
-                                  context,
-                                ).textTheme.headlineSmall,
-                              ),
-                              const SizedBox(height: AppSpacing.xs),
-                              Text(
-                                [
-                                  featured.category,
-                                  if (featured.brand?.trim().isNotEmpty == true)
-                                    featured.brand!.trim(),
-                                ].join(' • '),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.bodyMedium
-                                    ?.copyWith(
-                                      color: AppColors.onSurfaceVariant,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                Wrap(
-                  spacing: AppSpacing.sm,
-                  runSpacing: AppSpacing.sm,
-                  children: [
-                    if (data.favoriteCategory != null)
-                      CollectorChip(
-                        label: 'Top category: ${data.favoriteCategory}',
-                      ),
-                    if (featured.isFavorite)
-                      const CollectorChip(label: 'Favorited piece'),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }

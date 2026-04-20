@@ -67,9 +67,11 @@ interface OpenAiPhotoResult {
   result: NormalizedIdentificationResult;
   rawResult: unknown;
   isComicLike: boolean;
+  detectedBarcode: string | null;
 }
 
 const upcItemDbEndpoint = "https://api.upcitemdb.com/prod/trial/lookup";
+const upcItemDbSearchEndpoint = "https://api.upcitemdb.com/prod/trial/search";
 const goUpcEndpoint = "https://go-upc.com/api/v1/code";
 const comicVineSearchEndpoint = "https://comicvine.gamespot.com/api/search/";
 const openAiResponsesEndpoint = "https://api.openai.com/v1/responses";
@@ -96,6 +98,7 @@ const collectibleIdentificationSchema = {
     release_year: { anyOf: [{ type: "integer" }, { type: "null" }] },
     confidence: { anyOf: [{ type: "number" }, { type: "null" }] },
     source_badge: { anyOf: [{ type: "string" }, { type: "null" }] },
+    barcode_candidate: { anyOf: [{ type: "string" }, { type: "null" }] },
     is_comic_like: { anyOf: [{ type: "boolean" }, { type: "null" }] },
     comic_context: {
       anyOf: [
@@ -124,6 +127,7 @@ const collectibleIdentificationSchema = {
     "release_year",
     "confidence",
     "source_badge",
+    "barcode_candidate",
     "is_comic_like",
     "comic_context",
   ],
@@ -147,14 +151,16 @@ Deno.serve(async (req) => {
     }
 
     const authClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
+      auth: { persistSession: false, autoRefreshToken: false },
     });
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
     const {
-      data: { user },
-      error: userError,
-    } = await authClient.auth.getUser();
+      data: claimsData,
+      error: claimsError,
+    } = await authClient.auth.getClaims(token);
+    const userId = asString(claimsData?.claims?.sub);
 
-    if (userError || !user) {
+    if (claimsError || !userId) {
       return jsonResponse(
         { error: "Could not resolve the authenticated user." },
         401,
@@ -193,7 +199,7 @@ Deno.serve(async (req) => {
 
       const cached = await fetchCache({
         adminClient,
-        userId: user.id,
+        userId,
         lookupType: "barcode",
         lookupKey: barcode,
       });
@@ -211,7 +217,7 @@ Deno.serve(async (req) => {
         await Promise.all([
           saveCache({
             adminClient,
-            userId: user.id,
+            userId,
             lookupType: "barcode",
             lookupKey: barcode,
             ttlDays: 30,
@@ -232,7 +238,7 @@ Deno.serve(async (req) => {
         await Promise.all([
           saveCache({
             adminClient,
-            userId: user.id,
+            userId,
             lookupType: "barcode",
             lookupKey: barcode,
             ttlDays: 30,
@@ -265,7 +271,7 @@ Deno.serve(async (req) => {
       await Promise.all([
         saveCache({
           adminClient,
-          userId: user.id,
+          userId,
           lookupType: "barcode",
           lookupKey: barcode,
           ttlDays: 30,
@@ -293,7 +299,7 @@ Deno.serve(async (req) => {
     const imageFingerprint = await sha256Hex(decodeBase64(imageBase64));
     const cached = await fetchCache({
       adminClient,
-      userId: user.id,
+      userId,
       lookupType: "photo",
       lookupKey: imageFingerprint,
     });
@@ -307,6 +313,7 @@ Deno.serve(async (req) => {
       mimeType,
       barcode: barcodeHint,
     });
+    const resolvedBarcode = barcodeHint ?? openAiResult.detectedBarcode;
 
     let finalMatch: ProviderMatch = {
       status: openAiResult.result.title.trim().length === 0 ? "partial" : "matched",
@@ -316,15 +323,23 @@ Deno.serve(async (req) => {
     };
 
     const barcodeCatalogEnriched = await enrichPhotoWithBarcodeCatalog({
-      barcode: barcodeHint,
+      barcode: resolvedBarcode,
       baseResult: finalMatch.result,
       openAiRawResult: openAiResult.rawResult,
     });
     if (barcodeCatalogEnriched) {
       finalMatch = barcodeCatalogEnriched;
+    } else {
+      const textSearchEnriched = await enrichPhotoWithUpcItemDbSearch({
+        baseResult: finalMatch.result,
+        openAiRawResult: openAiResult.rawResult,
+      });
+      if (textSearchEnriched) {
+        finalMatch = textSearchEnriched;
+      }
     }
 
-    if (openAiResult.isComicLike) {
+    if (openAiResult.isComicLike && shouldTryComicEnrichment(finalMatch.result)) {
       const comicEnriched = await enrichComicProviders(finalMatch.result);
       if (comicEnriched) {
         finalMatch = {
@@ -343,7 +358,7 @@ Deno.serve(async (req) => {
 
     await saveCache({
       adminClient,
-      userId: user.id,
+      userId,
       lookupType: "photo",
       lookupKey: imageFingerprint,
       ttlDays: 14,
@@ -592,6 +607,76 @@ async function lookupUpcItemDb(barcode: string): Promise<ProviderMatch | null> {
   };
 }
 
+async function searchUpcItemDbByText(
+  baseResult: NormalizedIdentificationResult,
+): Promise<ProviderMatch | null> {
+  const searchQuery = buildUpcItemDbSearchQuery(baseResult);
+  if (!searchQuery) {
+    return null;
+  }
+
+  const url = new URL(upcItemDbSearchEndpoint);
+  url.searchParams.set("s", searchQuery);
+
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+  });
+  const payload = await safeJson(response);
+  if (response.status === 404 || response.status === 429 || response.status >= 500) {
+    return null;
+  }
+  if (response.status >= 400) {
+    return null;
+  }
+
+  const items = asArray(payload?.items);
+  if (!items.length) {
+    return null;
+  }
+
+  const bestItem = pickBestUpcItemDbSearchResult(items, baseResult);
+  if (!bestItem) {
+    return null;
+  }
+
+  const title = cleanString(bestItem["title"]);
+  if (!title) {
+    return null;
+  }
+
+  const rawCategory = cleanString(bestItem["category"]);
+  const bestBrand = cleanString(bestItem["brand"]);
+  const result = normalizeResult({
+    status: "matched",
+    providerStage: "upcitemdb",
+    title,
+    suggestedCategory: suggestCollectorCategory(rawCategory, title),
+    imageUrl: preferredImageUrl(bestItem["images"]),
+    description: cleanString(bestItem["description"]),
+    brand: bestBrand,
+    franchise: inferFranchise(title, bestBrand),
+    series: cleanString(bestItem["model"]) ?? cleanString(bestItem["mpn"]),
+    characterOrSubject: inferCharacterOrSubject(title),
+    releaseYear: inferYear(cleanString(bestItem["description"])),
+    barcode:
+      normalizeBarcode(cleanString(bestItem["upc"])) ??
+      normalizeBarcode(cleanString(bestItem["ean"])) ??
+      baseResult.barcode,
+    confidence: 0.76,
+    sourceBadge: "Matched via UPCItemDB search",
+    comicContext: rawCategory && rawCategory.toLowerCase().includes("comic")
+        ? { issue_number: null, volume_name: null, publisher: bestBrand }
+        : null,
+  });
+
+  return {
+    status: "matched",
+    providerStage: "upcitemdb",
+    result,
+    rawResult: payload,
+  };
+}
+
 async function lookupGoUpc(barcode: string): Promise<ProviderMatch | null> {
   const apiKey = Deno.env.get("GOUPC_API_KEY");
   if (!apiKey) {
@@ -687,7 +772,7 @@ async function identifyPhotoWithOpenAi({
             {
               type: "input_text",
               text:
-                "You identify collectible products from photos. Return only schema-valid JSON. Prefer specific collectible titles when possible. If unsure, keep title empty instead of inventing. suggested_category must be one of: Action Figures, Board Games, Comics, Memorabilia, Die-cast, Vinyl Figures, Statues, Trading Cards, Other.",
+                "You identify collectible products from photos. Return only schema-valid JSON. Prefer specific collectible titles when possible. If unsure, keep title empty instead of inventing. suggested_category must be one of: Action Figures, Board Games, Comics, Memorabilia, Die-cast, Vinyl Figures, Statues, Trading Cards, Other. If a barcode or ISBN is clearly readable in the image, include it as barcode_candidate. If it is not clearly readable, return null and do not guess.",
             },
           ],
         },
@@ -697,7 +782,7 @@ async function identifyPhotoWithOpenAi({
             {
               type: "input_text",
               text:
-                `Identify the collectible in this photo. Respond with JSON using exactly these keys: title, suggested_category, description, brand, franchise, series, character_or_subject, release_year, confidence, source_badge, is_comic_like, comic_context. comic_context must be either null or an object with issue_number, volume_name, publisher. Use null for unknown optional fields. Confidence should be between 0 and 1. Source badge should be a short premium-facing label like "AI identification". Barcode hint: ${barcode ?? "none"}.`,
+                `Identify the collectible in this photo. Respond with JSON using exactly these keys: title, suggested_category, description, brand, franchise, series, character_or_subject, release_year, confidence, source_badge, barcode_candidate, is_comic_like, comic_context. comic_context must be either null or an object with issue_number, volume_name, publisher. Use null for unknown optional fields. Confidence should be between 0 and 1. Source badge should be a short premium-facing label like "AI identification". barcode_candidate must be the visible barcode digits only, or null if no barcode is clearly readable. Do not guess missing digits. Barcode hint: ${barcode ?? "none"}.`,
             },
             {
               type: "input_image",
@@ -738,6 +823,7 @@ async function identifyPhotoWithOpenAi({
 
   const parsed = JSON.parse(rawJson) as JsonMap;
   const comicContext = asRecord(parsed.comic_context);
+  const resolvedBarcode = barcode ?? normalizeBarcode(asString(parsed.barcode_candidate));
 
   return {
     result: normalizeResult({
@@ -753,7 +839,7 @@ async function identifyPhotoWithOpenAi({
       series: cleanString(parsed.series),
       characterOrSubject: cleanString(parsed.character_or_subject),
       releaseYear: asInteger(parsed.release_year),
-      barcode,
+      barcode: resolvedBarcode,
       confidence: asNumber(parsed.confidence),
       sourceBadge: cleanString(parsed.source_badge) ?? "AI identification",
       comicContext: comicContext
@@ -767,6 +853,7 @@ async function identifyPhotoWithOpenAi({
     rawResult: payload,
     isComicLike: Boolean(parsed.is_comic_like) ||
         normalizeSuggestedCategory(parsed.suggested_category) == "Comics",
+    detectedBarcode: resolvedBarcode,
   };
 }
 
@@ -822,6 +909,58 @@ async function enrichPhotoWithBarcodeCatalog({
     rawResult: {
       openai: openAiRawResult,
       [providerMatch.providerStage]: providerMatch.rawResult,
+    },
+  };
+}
+
+async function enrichPhotoWithUpcItemDbSearch({
+  baseResult,
+  openAiRawResult,
+}: {
+  baseResult: NormalizedIdentificationResult;
+  openAiRawResult: unknown;
+}): Promise<ProviderMatch | null> {
+  if (!shouldTryUpcItemDbTextSearch(baseResult)) {
+    return null;
+  }
+
+  const providerMatch = await searchUpcItemDbByText(baseResult);
+  if (!providerMatch) {
+    return null;
+  }
+
+  const providerResult = providerMatch.result;
+  const mergedResult = normalizeResult({
+    status: baseResult.title.trim().length === 0 &&
+        providerResult.title.trim().length === 0
+        ? "partial"
+        : "enriched",
+    providerStage: "upcitemdb",
+    title: choosePreferredTitle(baseResult.title, providerResult.title),
+    suggestedCategory:
+      normalizeSuggestedCategory(baseResult.suggested_category) ??
+      normalizeSuggestedCategory(providerResult.suggested_category),
+    imageUrl: providerResult.image_url ?? baseResult.image_url,
+    description: providerResult.description ?? baseResult.description,
+    brand: baseResult.brand ?? providerResult.brand,
+    franchise: baseResult.franchise ?? providerResult.franchise,
+    series: baseResult.series ?? providerResult.series,
+    characterOrSubject:
+      baseResult.character_or_subject ?? providerResult.character_or_subject,
+    releaseYear: baseResult.release_year ?? providerResult.release_year,
+    barcode: providerResult.barcode ?? baseResult.barcode,
+    confidence: Math.max(baseResult.confidence ?? 0.55, providerResult.confidence ?? 0),
+    sourceBadge: "AI + UPCItemDB",
+    comicContext: baseResult.comic_context ?? providerResult.comic_context,
+  });
+
+  return {
+    status: mergedResult.title.trim().length === 0 ? "partial" : "enriched",
+    providerStage: "upcitemdb",
+    result: mergedResult,
+    rawResult: {
+      openai: openAiRawResult,
+      upcitemdb_search: providerMatch.rawResult,
     },
   };
 }
@@ -1086,7 +1225,42 @@ function preferredImageUrl(rawImages: unknown): string | null {
   const images = asArray(rawImages)
     .map((image) => cleanString(image))
     .filter((image): image is string => Boolean(image));
-  return images.find((image) => image.startsWith("https://")) ?? images[0] ?? null;
+  if (!images.length) {
+    return null;
+  }
+
+  images.sort((left, right) => scoreImageUrl(right) - scoreImageUrl(left));
+  return images[0];
+}
+
+function scoreImageUrl(url: string): number {
+  let score = 0;
+  if (url.startsWith("https://")) {
+    score += 20;
+  } else if (url.startsWith("http://")) {
+    score += 5;
+  }
+
+  const hostname = (() => {
+    try {
+      return new URL(url).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+
+  if (!hostname) {
+    return score;
+  }
+
+  if (hostname.includes("walmartimages.com")) score += 12;
+  if (hostname.includes("bbystatic.com")) score += 11;
+  if (hostname.includes("tfaw.com")) score += 9;
+  if (hostname.includes("fun.com")) score += 8;
+  if (hostname.includes("booksamillion.com")) score -= 20;
+  if (hostname.includes("entertainmentearth.com")) score -= 20;
+
+  return score;
 }
 
 function choosePreferredTitle(primary: string, fallback: string | null): string {
@@ -1109,6 +1283,185 @@ function choosePreferredTitle(primary: string, fallback: string | null): string 
     return normalizedFallback;
   }
   return normalizedPrimary;
+}
+
+function shouldTryUpcItemDbTextSearch(
+  baseResult: NormalizedIdentificationResult,
+): boolean {
+  if (baseResult.barcode) {
+    return false;
+  }
+
+  if (normalizeSuggestedCategory(baseResult.suggested_category) === "Comics") {
+    return false;
+  }
+
+  const title = cleanString(baseResult.title);
+  if (!title || title.length < 6) {
+    return false;
+  }
+
+  return (baseResult.confidence ?? 0) >= 0.45;
+}
+
+function shouldTryComicEnrichment(
+  baseResult: NormalizedIdentificationResult,
+): boolean {
+  if (looksLikeComicArtMerchandise(baseResult)) {
+    return false;
+  }
+
+  return true;
+}
+
+function looksLikeComicArtMerchandise(
+  baseResult: NormalizedIdentificationResult,
+): boolean {
+  const title = normalizeText(baseResult.title);
+  const brand = normalizeText(baseResult.brand ?? "");
+  const franchise = normalizeText(baseResult.franchise ?? "");
+  const description = normalizeText(baseResult.description ?? "");
+  const combined = [title, brand, franchise, description]
+    .filter((value) => value.isNotEmpty)
+    .join(" ");
+
+  if (!combined) {
+    return false;
+  }
+
+  const merchSignals = [
+    "funko",
+    "pop",
+    "comic covers",
+    "comic cover",
+    "deluxe",
+    "vinyl",
+    "vinyl figure",
+    "figure",
+    "targetcon",
+    "exclusive",
+    "collector corps",
+    "collectible",
+    "boxed",
+    "window box",
+  ];
+
+  const category = normalizeSuggestedCategory(baseResult.suggested_category);
+  const hasMerchSignals = merchSignals.some((signal) => combined.includes(signal));
+  const productCategory =
+    category == "Action Figures" ||
+    category == "Vinyl Figures" ||
+    category == "Statues" ||
+    category == "Memorabilia" ||
+    category == "Other";
+
+  return hasMerchSignals || productCategory;
+}
+
+function buildUpcItemDbSearchQuery(
+  baseResult: NormalizedIdentificationResult,
+): string | null {
+  const title = cleanString(baseResult.title);
+  if (!title) {
+    return null;
+  }
+
+  if (title.length >= 8) {
+    return title;
+  }
+
+  const supporting = [
+    cleanString(baseResult.series),
+    cleanString(baseResult.franchise),
+    cleanString(baseResult.brand),
+  ].filter((value): value is string => Boolean(value));
+  const query = [title, ...supporting].join(" ");
+  return cleanString(query);
+}
+
+function pickBestUpcItemDbSearchResult(
+  candidates: unknown[],
+  baseResult: NormalizedIdentificationResult,
+): JsonMap | null {
+  const wantedTitle = normalizeText(baseResult.title);
+  const wantedBrand = normalizeText(baseResult.brand ?? "");
+  const wantedSeries = normalizeText(baseResult.series ?? "");
+  const wantedFranchise = normalizeText(baseResult.franchise ?? "");
+  const wantedCategory = normalizeSuggestedCategory(baseResult.suggested_category);
+  let bestScore = -1;
+  let best: JsonMap | null = null;
+
+  for (const candidate of candidates) {
+    const item = asRecord(candidate);
+    if (!item) {
+      continue;
+    }
+
+    const title = normalizeText(cleanString(item["title"]) ?? "");
+    const brand = normalizeText(cleanString(item["brand"]) ?? "");
+    const model = normalizeText(cleanString(item["model"]) ?? "");
+    const category = cleanString(item["category"]);
+    const suggestedCategory = suggestCollectorCategory(
+      category,
+      cleanString(item["title"]),
+    );
+    let score = 0;
+
+    if (wantedTitle && title === wantedTitle) {
+      score += 14;
+    } else if (wantedTitle && title.includes(wantedTitle)) {
+      score += 10;
+    } else if (wantedTitle && wantedTitle.includes(title) && title.length >= 8) {
+      score += 8;
+    } else {
+      score += overlappingWordScore(wantedTitle, title);
+    }
+
+    if (wantedBrand && brand === wantedBrand) {
+      score += 5;
+    } else if (wantedBrand && brand && wantedBrand.includes(brand)) {
+      score += 3;
+    }
+
+    if (wantedSeries && model && (model === wantedSeries || wantedSeries.includes(model))) {
+      score += 2;
+    }
+
+    if (wantedFranchise && title.includes(wantedFranchise)) {
+      score += 4;
+    }
+
+    if (wantedCategory && suggestedCategory === wantedCategory) {
+      score += 2;
+    }
+
+    if (preferredImageUrl(item["images"])) {
+      score += 4;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = item;
+    }
+  }
+
+  return bestScore >= 5 ? best : null;
+}
+
+function overlappingWordScore(left: string, right: string): number {
+  if (!left || !right) {
+    return 0;
+  }
+
+  const leftWords = new Set(left.split(" ").filter((word) => word.length >= 3));
+  const rightWords = new Set(right.split(" ").filter((word) => word.length >= 3));
+  let score = 0;
+  for (const word of leftWords) {
+    if (rightWords.has(word)) {
+      score += 2;
+    }
+  }
+  return score;
 }
 
 function normalizeSuggestedCategory(value: unknown): string | null {

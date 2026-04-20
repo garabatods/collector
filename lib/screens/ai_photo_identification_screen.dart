@@ -44,8 +44,18 @@ class _AiPhotoIdentificationScreenState
   CollectibleIdentificationResult? _result;
   String? _message;
   _AiPhotoPhase _phase = _AiPhotoPhase.idle;
+  bool _preferCapturedPhoto = false;
 
   bool get _hasImage => _selectedImage != null && _selectedImageBytes != null;
+  bool get _shouldUseCapturedPhoto {
+    if (!_hasImage) {
+      return false;
+    }
+    final result = _result;
+    return result == null ||
+        _preferCapturedPhoto ||
+        !_hasUsableSuggestedImage(result);
+  }
 
   Future<void> _pickImage(ImageSource source) async {
     final image = await _picker.pickImage(
@@ -68,6 +78,7 @@ class _AiPhotoIdentificationScreenState
       _result = null;
       _message = null;
       _phase = _AiPhotoPhase.identifying;
+      _preferCapturedPhoto = false;
     });
 
     await _identifySelectedImage();
@@ -105,6 +116,7 @@ class _AiPhotoIdentificationScreenState
             : result.isNotFound
             ? 'We could not confidently identify this piece yet. You can still continue and finish the details yourself.'
             : 'AI identification is unavailable right now. You can still continue manually.';
+        _preferCapturedPhoto = !_hasUsableSuggestedImage(result);
       });
     } on CollectibleIdentificationException catch (error) {
       if (!mounted) {
@@ -140,9 +152,7 @@ class _AiPhotoIdentificationScreenState
           scannedBarcode: widget.seedBarcode ?? _result?.barcode,
           identificationResult: _result,
           autofillResult: autofillResult,
-          initialImage: (_result?.imageUrl ?? '').isNotEmpty
-              ? null
-              : _selectedImage,
+          initialImage: _shouldUseCapturedPhoto ? _selectedImage : null,
           initialCategory: widget.initialCategory,
         ),
       ),
@@ -181,7 +191,32 @@ class _AiPhotoIdentificationScreenState
       _result = null;
       _message = null;
       _phase = _AiPhotoPhase.idle;
+      _preferCapturedPhoto = false;
     });
+  }
+
+  static bool _hasUsableSuggestedImage(CollectibleIdentificationResult result) {
+    final imageUrl = (result.imageUrl ?? '').trim();
+    if (imageUrl.isEmpty) {
+      return false;
+    }
+
+    final normalized = imageUrl.toLowerCase();
+    if (normalized.contains('placeholder') ||
+        normalized.contains('noimage') ||
+        normalized.contains('no-image') ||
+        normalized.contains('image-not-available') ||
+        normalized.contains('/missing')) {
+      return false;
+    }
+
+    final host = Uri.tryParse(imageUrl)?.host.toLowerCase() ?? '';
+    if (host.contains('booksamillion.com') ||
+        host.contains('entertainmentearth.com')) {
+      return false;
+    }
+
+    return true;
   }
 
   @override
@@ -289,7 +324,7 @@ class _AiPhotoIdentificationScreenState
                                   : _hasImage
                                   ? (_message ??
                                         'You can still continue manually with the selected photo.')
-                                  : 'Capture the full front of the item or cover art for the strongest result.',
+                                  : 'Capture the full front of the item or cover art for the strongest result. Include any label, plaque, or set number when possible.',
                               style: Theme.of(context).textTheme.bodyMedium
                                   ?.copyWith(color: AppColors.onSurfaceVariant),
                             ),
@@ -299,6 +334,24 @@ class _AiPhotoIdentificationScreenState
                             ] else if (result?.hasCatalogMatch == true) ...[
                               const SizedBox(height: AppSpacing.md),
                               _AiResultCard(result: result!),
+                              if (_hasImage) ...[
+                                const SizedBox(height: AppSpacing.md),
+                                _PhotoChoiceCard(
+                                  useCapturedPhoto: _shouldUseCapturedPhoto,
+                                  suggestedPhotoAvailable:
+                                      _hasUsableSuggestedImage(result),
+                                  onUseCapturedPhoto: () {
+                                    setState(() {
+                                      _preferCapturedPhoto = true;
+                                    });
+                                  },
+                                  onUseSuggestedPhoto: () {
+                                    setState(() {
+                                      _preferCapturedPhoto = false;
+                                    });
+                                  },
+                                ),
+                              ],
                             ] else if (_hasImage && _message != null) ...[
                               const SizedBox(height: AppSpacing.md),
                               _AiNoticeCard(
@@ -728,6 +781,71 @@ class _AiResultCard extends StatelessWidget {
                 _MetaTag(label: '#${result.comicContext!.issueNumber!}'),
               if ((result.comicContext?.publisher ?? '').isNotEmpty)
                 _MetaTag(label: result.comicContext!.publisher!),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhotoChoiceCard extends StatelessWidget {
+  const _PhotoChoiceCard({
+    required this.useCapturedPhoto,
+    required this.suggestedPhotoAvailable,
+    required this.onUseCapturedPhoto,
+    required this.onUseSuggestedPhoto,
+  });
+
+  final bool useCapturedPhoto;
+  final bool suggestedPhotoAvailable;
+  final VoidCallback onUseCapturedPhoto;
+  final VoidCallback onUseSuggestedPhoto;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHighest.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.outlineVariant.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Photo to save', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            suggestedPhotoAvailable
+                ? 'Choose whether to keep the catalog image or save the photo you just took.'
+                : 'The suggested catalog photo is not very useful here, so your photo will be saved by default.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.sm,
+            children: [
+              ChoiceChip(
+                label: const Text('Use your photo'),
+                selected: useCapturedPhoto,
+                onSelected: (_) => onUseCapturedPhoto(),
+              ),
+              ChoiceChip(
+                label: Text(
+                  suggestedPhotoAvailable
+                      ? 'Use suggested photo'
+                      : 'Suggested photo unavailable',
+                ),
+                selected: !useCapturedPhoto,
+                onSelected: suggestedPhotoAvailable
+                    ? (_) => onUseSuggestedPhoto()
+                    : null,
+              ),
             ],
           ),
         ],

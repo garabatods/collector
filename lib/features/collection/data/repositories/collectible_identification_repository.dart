@@ -28,7 +28,7 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
 
     final cacheKey = '${_cachePrefix}barcode:$normalizedBarcode';
     final cached = SessionCache.get<CollectibleIdentificationResult>(cacheKey);
-    if (cached != null) {
+    if (cached != null && !_shouldRefreshBarcodeResult(cached)) {
       return cached;
     }
 
@@ -116,6 +116,32 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
   static String _normalizeBarcode(String barcode) {
     final normalized = barcode.replaceAll(RegExp(r'[^0-9Xx]'), '').trim();
     return normalized;
+  }
+
+  static bool _shouldRefreshBarcodeResult(
+    CollectibleIdentificationResult result,
+  ) {
+    if (!result.hasCatalogMatch) {
+      return false;
+    }
+
+    final imageUrl = (result.imageUrl ?? '').trim();
+    if (imageUrl.isEmpty) {
+      return true;
+    }
+
+    return _isLikelyBlockedImageHost(imageUrl);
+  }
+
+  static bool _isLikelyBlockedImageHost(String imageUrl) {
+    final uri = Uri.tryParse(imageUrl);
+    final host = (uri?.host ?? '').toLowerCase();
+    if (host.isEmpty) {
+      return false;
+    }
+
+    return host.contains('booksamillion.com') ||
+        host.contains('entertainmentearth.com');
   }
 
   Future<FunctionResponse> _invokeIdentifyCollectible({

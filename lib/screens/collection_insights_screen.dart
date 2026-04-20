@@ -13,9 +13,11 @@ import '../theme/app_fonts.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/collector_button.dart';
+import '../widgets/collector_highlight_panel.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/home_collection_insight_card.dart';
+import 'collectible_detail_screen.dart';
 import 'category_collection_screen.dart';
 
 class CollectionInsightsScreen extends StatefulWidget {
@@ -84,6 +86,26 @@ class _CollectionInsightsScreenState extends State<CollectionInsightsScreen> {
   Future<void> _reload() async {
     await _archiveRepository.syncIfNeeded(force: true);
     await _loadHistory();
+  }
+
+  Future<void> _openFeaturedItem(ArchiveProfileSummary summary) async {
+    final featuredItem = summary.featuredItem;
+    if (featuredItem == null) {
+      return;
+    }
+
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => CollectibleDetailScreen(
+          collectible: featuredItem,
+          photoRef: summary.featuredPhotoRef,
+        ),
+      ),
+    );
+
+    if (changed == true) {
+      await _reload();
+    }
   }
 
   void _scrollToTop() {
@@ -221,7 +243,7 @@ class _CollectionInsightsScreenState extends State<CollectionInsightsScreen> {
                       AppSpacing.md,
                       0,
                       AppSpacing.md,
-                      140,
+                      0,
                     ),
                     sliver: SliverToBoxAdapter(
                       child: Column(
@@ -247,8 +269,44 @@ class _CollectionInsightsScreenState extends State<CollectionInsightsScreen> {
                       ),
                     ),
                   ),
-                ] else
-                  const SliverToBoxAdapter(child: SizedBox(height: 140)),
+                ],
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.md,
+                      AppSpacing.section,
+                      AppSpacing.md,
+                      AppSpacing.md,
+                    ),
+                    child: const _InsightsHighlightSectionLabel(),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.md,
+                    ),
+                    child: StreamBuilder<ArchiveProfileSummary>(
+                      stream: _archiveRepository.watchProfileSummary(),
+                      builder: (context, profileSnapshot) {
+                        final summary = profileSnapshot.data;
+                        if (summary == null || summary.featuredItem == null) {
+                          return const SizedBox.shrink();
+                        }
+
+                        return CollectorHighlightPanel(
+                          totalItems: summary.totalItems,
+                          featuredItem: summary.featuredItem,
+                          featuredPhotoRef: summary.featuredPhotoRef,
+                          favoriteCategory: summary.favoriteCategory,
+                          onOpenFeaturedItem: () => _openFeaturedItem(summary),
+                          onAddItem: widget.onAddFirstItem,
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 140)),
               ],
             ),
           );
@@ -437,6 +495,21 @@ class _HeroInsightSectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       'Collection Insight'.toUpperCase(),
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+        color: AppColors.onSurfaceVariant.withValues(alpha: 0.88),
+        letterSpacing: 1.2,
+      ),
+    );
+  }
+}
+
+class _InsightsHighlightSectionLabel extends StatelessWidget {
+  const _InsightsHighlightSectionLabel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      'Collector Highlight'.toUpperCase(),
       style: Theme.of(context).textTheme.labelMedium?.copyWith(
         color: AppColors.onSurfaceVariant.withValues(alpha: 0.88),
         letterSpacing: 1.2,

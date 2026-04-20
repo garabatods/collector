@@ -116,8 +116,6 @@ class _CollectionLibraryLoadedStateState
   final _scrollController = ScrollController();
 
   var _favoritesOnly = false;
-  var _grailsOnly = false;
-  var _duplicatesOnly = false;
   var _hasPhotoOnly = false;
   var _missingPhotoOnly = false;
   String? _selectedCategory;
@@ -203,8 +201,6 @@ class _CollectionLibraryLoadedStateState
     _exitSelectionMode();
     setState(() {
       _favoritesOnly = nextFavoritesOnly;
-      _grailsOnly = false;
-      _duplicatesOnly = false;
       _hasPhotoOnly = nextHasPhotoOnly;
       _missingPhotoOnly = nextMissingPhotoOnly;
       _selectedCategory = nextCategory;
@@ -273,8 +269,6 @@ class _CollectionLibraryLoadedStateState
       builder: (context) => _LibraryRefineSheet(
         sort: _sort,
         favoritesOnly: _favoritesOnly,
-        grailsOnly: _grailsOnly,
-        duplicatesOnly: _duplicatesOnly,
         hasPhotoOnly: _hasPhotoOnly,
         missingPhotoOnly: _missingPhotoOnly,
       ),
@@ -286,8 +280,6 @@ class _CollectionLibraryLoadedStateState
 
     if (nextRefinement.sort == _sort &&
         nextRefinement.favoritesOnly == _favoritesOnly &&
-        nextRefinement.grailsOnly == _grailsOnly &&
-        nextRefinement.duplicatesOnly == _duplicatesOnly &&
         nextRefinement.hasPhotoOnly == _hasPhotoOnly &&
         nextRefinement.missingPhotoOnly == _missingPhotoOnly) {
       return;
@@ -296,8 +288,6 @@ class _CollectionLibraryLoadedStateState
     setState(() {
       _sort = nextRefinement.sort;
       _favoritesOnly = nextRefinement.favoritesOnly;
-      _grailsOnly = nextRefinement.grailsOnly;
-      _duplicatesOnly = nextRefinement.duplicatesOnly;
       _hasPhotoOnly = nextRefinement.hasPhotoOnly;
       _missingPhotoOnly = nextRefinement.missingPhotoOnly;
       _resetVisibleItems();
@@ -340,8 +330,6 @@ class _CollectionLibraryLoadedStateState
     _exitSelectionMode();
     setState(() {
       _favoritesOnly = false;
-      _grailsOnly = false;
-      _duplicatesOnly = false;
       _hasPhotoOnly = false;
       _missingPhotoOnly = false;
       _selectedCategory = null;
@@ -463,8 +451,6 @@ class _CollectionLibraryLoadedStateState
 
   bool get _hasActiveRefinementState {
     return _favoritesOnly ||
-        _grailsOnly ||
-        _duplicatesOnly ||
         _hasPhotoOnly ||
         _missingPhotoOnly ||
         _sort != _LibrarySortOption.newest;
@@ -473,8 +459,6 @@ class _CollectionLibraryLoadedStateState
   bool get _hasDefaultBrowseState {
     return _query.isEmpty &&
         !_favoritesOnly &&
-        !_grailsOnly &&
-        !_duplicatesOnly &&
         !_hasPhotoOnly &&
         !_missingPhotoOnly &&
         _selectedCategory == null &&
@@ -494,8 +478,6 @@ class _CollectionLibraryLoadedStateState
       filters: ArchiveLibraryFilters(
         query: _query,
         favoritesOnly: _favoritesOnly,
-        grailsOnly: _grailsOnly,
-        duplicatesOnly: _duplicatesOnly,
         hasPhotoOnly: _hasPhotoOnly,
         missingPhotoOnly: _missingPhotoOnly,
         category: _selectedCategory,
@@ -608,8 +590,6 @@ class _CollectionLibraryLoadedStateState
                               sortLabel: _sort.label,
                               showSortChip: _sort != _LibrarySortOption.newest,
                               favoritesOnly: _favoritesOnly,
-                              grailsOnly: _grailsOnly,
-                              duplicatesOnly: _duplicatesOnly,
                               hasPhotoOnly: _hasPhotoOnly,
                               missingPhotoOnly: _missingPhotoOnly,
                               onClearSort: () {
@@ -622,20 +602,6 @@ class _CollectionLibraryLoadedStateState
                               onClearFavorites: () {
                                 setState(() {
                                   _favoritesOnly = false;
-                                  _resetVisibleItems();
-                                  _stream = _buildStream();
-                                });
-                              },
-                              onClearGrails: () {
-                                setState(() {
-                                  _grailsOnly = false;
-                                  _resetVisibleItems();
-                                  _stream = _buildStream();
-                                });
-                              },
-                              onClearDuplicates: () {
-                                setState(() {
-                                  _duplicatesOnly = false;
                                   _resetVisibleItems();
                                   _stream = _buildStream();
                                 });
@@ -1131,14 +1097,10 @@ class _ActiveBrowseStrip extends StatelessWidget {
     required this.sortLabel,
     required this.showSortChip,
     required this.favoritesOnly,
-    required this.grailsOnly,
-    required this.duplicatesOnly,
     required this.hasPhotoOnly,
     required this.missingPhotoOnly,
     required this.onClearSort,
     required this.onClearFavorites,
-    required this.onClearGrails,
-    required this.onClearDuplicates,
     required this.onClearHasPhoto,
     required this.onClearMissingPhoto,
     required this.onClearAll,
@@ -1147,14 +1109,10 @@ class _ActiveBrowseStrip extends StatelessWidget {
   final String sortLabel;
   final bool showSortChip;
   final bool favoritesOnly;
-  final bool grailsOnly;
-  final bool duplicatesOnly;
   final bool hasPhotoOnly;
   final bool missingPhotoOnly;
   final VoidCallback onClearSort;
   final VoidCallback onClearFavorites;
-  final VoidCallback onClearGrails;
-  final VoidCallback onClearDuplicates;
   final VoidCallback onClearHasPhoto;
   final VoidCallback onClearMissingPhoto;
   final VoidCallback onClearAll;
@@ -1171,14 +1129,6 @@ class _ActiveBrowseStrip extends StatelessWidget {
           ],
           if (favoritesOnly) ...[
             _AppliedBrowseChip(label: 'Favorites', onTap: onClearFavorites),
-            const SizedBox(width: AppSpacing.sm),
-          ],
-          if (grailsOnly) ...[
-            _AppliedBrowseChip(label: 'Grails', onTap: onClearGrails),
-            const SizedBox(width: AppSpacing.sm),
-          ],
-          if (duplicatesOnly) ...[
-            _AppliedBrowseChip(label: 'Duplicates', onTap: onClearDuplicates),
             const SizedBox(width: AppSpacing.sm),
           ],
           if (hasPhotoOnly) ...[
@@ -1366,16 +1316,12 @@ class _LibraryRefineSelection {
   const _LibraryRefineSelection({
     required this.sort,
     required this.favoritesOnly,
-    required this.grailsOnly,
-    required this.duplicatesOnly,
     required this.hasPhotoOnly,
     required this.missingPhotoOnly,
   });
 
   final _LibrarySortOption sort;
   final bool favoritesOnly;
-  final bool grailsOnly;
-  final bool duplicatesOnly;
   final bool hasPhotoOnly;
   final bool missingPhotoOnly;
 }
@@ -1623,16 +1569,12 @@ class _LibraryRefineSheet extends StatefulWidget {
   const _LibraryRefineSheet({
     required this.sort,
     required this.favoritesOnly,
-    required this.grailsOnly,
-    required this.duplicatesOnly,
     required this.hasPhotoOnly,
     required this.missingPhotoOnly,
   });
 
   final _LibrarySortOption sort;
   final bool favoritesOnly;
-  final bool grailsOnly;
-  final bool duplicatesOnly;
   final bool hasPhotoOnly;
   final bool missingPhotoOnly;
 
@@ -1643,8 +1585,6 @@ class _LibraryRefineSheet extends StatefulWidget {
 class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
   late _LibrarySortOption _sort;
   late bool _favoritesOnly;
-  late bool _grailsOnly;
-  late bool _duplicatesOnly;
   late bool _hasPhotoOnly;
   late bool _missingPhotoOnly;
 
@@ -1653,8 +1593,6 @@ class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
     super.initState();
     _sort = widget.sort;
     _favoritesOnly = widget.favoritesOnly;
-    _grailsOnly = widget.grailsOnly;
-    _duplicatesOnly = widget.duplicatesOnly;
     _hasPhotoOnly = widget.hasPhotoOnly;
     _missingPhotoOnly = widget.missingPhotoOnly;
   }
@@ -1663,8 +1601,6 @@ class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
     setState(() {
       _sort = _LibrarySortOption.newest;
       _favoritesOnly = false;
-      _grailsOnly = false;
-      _duplicatesOnly = false;
       _hasPhotoOnly = false;
       _missingPhotoOnly = false;
     });
@@ -1675,8 +1611,6 @@ class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
       _LibraryRefineSelection(
         sort: _sort,
         favoritesOnly: _favoritesOnly,
-        grailsOnly: _grailsOnly,
-        duplicatesOnly: _duplicatesOnly,
         hasPhotoOnly: _hasPhotoOnly,
         missingPhotoOnly: _missingPhotoOnly,
       ),
@@ -1733,30 +1667,6 @@ class _LibraryRefineSheetState extends State<_LibraryRefineSheet> {
             onTap: () {
               setState(() {
                 _favoritesOnly = !_favoritesOnly;
-              });
-            },
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          _LibraryFilterOption(
-            label: 'Grails',
-            description: 'Focus on your most sought-after pieces.',
-            active: _grailsOnly,
-            icon: Icons.workspace_premium_outlined,
-            onTap: () {
-              setState(() {
-                _grailsOnly = !_grailsOnly;
-              });
-            },
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          _LibraryFilterOption(
-            label: 'Duplicates',
-            description: 'Surface items you own more than once.',
-            active: _duplicatesOnly,
-            icon: Icons.copy_all_rounded,
-            onTap: () {
-              setState(() {
-                _duplicatesOnly = !_duplicatesOnly;
               });
             },
           ),
