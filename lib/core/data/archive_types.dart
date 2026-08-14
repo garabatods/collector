@@ -57,6 +57,7 @@ class ArchivePhotoRef {
 
 class ArchiveHomeSummary {
   const ArchiveHomeSummary({
+    required this.userId,
     required this.profile,
     required this.collectibles,
     required this.wishlistCount,
@@ -65,6 +66,7 @@ class ArchiveHomeSummary {
     required this.photoRefsByCollectibleId,
   });
 
+  final String userId;
   final ProfileModel? profile;
   final List<CollectibleModel> collectibles;
   final int wishlistCount;
@@ -162,6 +164,7 @@ class ArchiveCollectibleDetail {
 
 class ArchiveProfileSummary {
   const ArchiveProfileSummary({
+    required this.userId,
     required this.profile,
     required this.email,
     required this.totalItems,
@@ -177,6 +180,7 @@ class ArchiveProfileSummary {
     required this.favoriteCategory,
   });
 
+  final String userId;
   final ProfileModel? profile;
   final String? email;
   final int totalItems;

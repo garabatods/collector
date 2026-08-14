@@ -249,13 +249,19 @@ LazyDatabase _openConnection() {
 class LocalArchiveDatabase extends _$LocalArchiveDatabase {
   LocalArchiveDatabase._() : super(_openConnection());
 
+  LocalArchiveDatabase.forTesting(super.e);
+
   static final LocalArchiveDatabase instance = LocalArchiveDatabase._();
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) async {
+      await m.createAll();
+      await _createLocalIndexes();
+    },
     onUpgrade: (m, from, to) async {
       if (from < 2) {
         for (final table in allTables.toList().reversed) {
@@ -263,8 +269,47 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
         }
         await m.createAll();
       }
+      if (from < 3) {
+        await _createLocalIndexes();
+      }
     },
   );
+
+  Future<void> _createLocalIndexes() async {
+    const statements = [
+      'create index if not exists collectibles_local_user_created_idx '
+          'on collectibles_local (user_id, created_at desc)',
+      'create index if not exists collectibles_local_user_category_idx '
+          'on collectibles_local (user_id, category collate nocase)',
+      'create index if not exists collectibles_local_user_title_idx '
+          'on collectibles_local (user_id, title collate nocase)',
+      'create index if not exists collectibles_local_user_favorites_idx '
+          'on collectibles_local (user_id, created_at desc) '
+          'where is_favorite = 1',
+      'create index if not exists collectibles_local_user_grails_idx '
+          'on collectibles_local (user_id, created_at desc) '
+          'where is_grail = 1',
+      'create index if not exists collectibles_local_user_duplicates_idx '
+          'on collectibles_local (user_id, created_at desc) '
+          'where is_duplicate = 1',
+      'create index if not exists collectible_photos_local_user_item_idx '
+          'on collectible_photos_local '
+          '(user_id, collectible_id, is_primary desc, display_order, created_at)',
+      'create index if not exists wishlist_items_local_user_created_idx '
+          'on wishlist_items_local (user_id, created_at desc)',
+      'create index if not exists tags_local_user_name_idx '
+          'on tags_local (user_id, name collate nocase)',
+      'create index if not exists tag_links_local_user_item_idx '
+          'on collectible_tag_links_local (user_id, collectible_id)',
+      'create index if not exists photo_cache_local_user_item_idx '
+          'on photo_cache_entries (user_id, collectible_id)',
+      'create index if not exists photo_cache_local_user_touch_idx '
+          'on photo_cache_entries (user_id, last_touched_at)',
+    ];
+    for (final statement in statements) {
+      await customStatement(statement);
+    }
+  }
 
   Stream<ProfileModel?> watchProfile(String userId) {
     final query = select(profilesLocal)
@@ -308,53 +353,56 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
       ..where((tbl) => tbl.userId.equals(userId))
       ..orderBy([(tbl) => OrderingTerm.desc(tbl.createdAt)]);
     return query.watch().map(
-      (rows) => rows
-          .map(
-            (row) => CollectibleModel.fromJson({
-              'id': row.id,
-              'user_id': row.userId,
-              'barcode': row.barcode,
-              'title': row.title,
-              'category': row.category,
-              'description': row.description,
-              'brand': row.brand,
-              'series': row.series,
-              'franchise': row.franchise,
-              'line_or_series': row.lineOrSeries,
-              'character_or_subject': row.characterOrSubject,
-              'release_year': row.releaseYear,
-              'box_status': row.boxStatus,
-              'item_number': row.itemNumber,
-              'item_condition': row.itemCondition,
-              'quantity': row.quantity,
-              'purchase_price': row.purchasePrice,
-              'estimated_value': row.estimatedValue,
-              'acquired_on': row.acquiredOn,
-              'notes': row.notes,
-              'is_favorite': row.isFavorite,
-              'is_grail': row.isGrail,
-              'is_duplicate': row.isDuplicate,
-              'open_to_trade': row.openToTrade,
-              'created_at': row.createdAt,
-              'updated_at': row.updatedAt,
-              'collectible_tags': _decodeCollectibleTagsJson(row.tagsJson),
-            }),
-          )
-          .toList(growable: false),
+      (rows) => rows.map(_mapCollectibleRow).toList(growable: false),
     );
   }
 
   Future<List<CollectibleModel>> getCollectibles(String userId) async {
-    return watchCollectibles(userId).first;
+    final query = select(collectiblesLocal)
+      ..where((tbl) => tbl.userId.equals(userId))
+      ..orderBy([(tbl) => OrderingTerm.desc(tbl.createdAt)]);
+    final rows = await query.get();
+    return rows.map(_mapCollectibleRow).toList(growable: false);
   }
 
   Stream<CollectibleModel?> watchCollectibleById(String userId, String id) {
-    return watchCollectibles(userId).map(
-      (items) => items.cast<CollectibleModel?>().firstWhere(
-        (item) => item?.id == id,
-        orElse: () => null,
-      ),
+    final query = select(collectiblesLocal)
+      ..where((tbl) => tbl.userId.equals(userId) & tbl.id.equals(id));
+    return query.watchSingleOrNull().map(
+      (row) => row == null ? null : _mapCollectibleRow(row),
     );
+  }
+
+  CollectibleModel _mapCollectibleRow(CollectiblesLocalData row) {
+    return CollectibleModel.fromJson({
+      'id': row.id,
+      'user_id': row.userId,
+      'barcode': row.barcode,
+      'title': row.title,
+      'category': row.category,
+      'description': row.description,
+      'brand': row.brand,
+      'series': row.series,
+      'franchise': row.franchise,
+      'line_or_series': row.lineOrSeries,
+      'character_or_subject': row.characterOrSubject,
+      'release_year': row.releaseYear,
+      'box_status': row.boxStatus,
+      'item_number': row.itemNumber,
+      'item_condition': row.itemCondition,
+      'quantity': row.quantity,
+      'purchase_price': row.purchasePrice,
+      'estimated_value': row.estimatedValue,
+      'acquired_on': row.acquiredOn,
+      'notes': row.notes,
+      'is_favorite': row.isFavorite,
+      'is_grail': row.isGrail,
+      'is_duplicate': row.isDuplicate,
+      'open_to_trade': row.openToTrade,
+      'created_at': row.createdAt,
+      'updated_at': row.updatedAt,
+      'collectible_tags': _decodeCollectibleTagsJson(row.tagsJson),
+    });
   }
 
   Stream<List<WishlistItemModel>> watchWishlistItems(String userId) {
@@ -442,7 +490,20 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
   }
 
   Future<List<TagModel>> getTags(String userId) async {
-    return watchTags(userId).first;
+    final query = select(tagsLocal)
+      ..where((tbl) => tbl.userId.equals(userId))
+      ..orderBy([(tbl) => OrderingTerm.asc(tbl.name)]);
+    final rows = await query.get();
+    return rows
+        .map(
+          (row) => TagModel.fromJson({
+            'id': row.id,
+            'user_id': row.userId,
+            'name': row.name,
+            'created_at': row.createdAt,
+          }),
+        )
+        .toList(growable: false);
   }
 
   Stream<List<ArchiveTagLinkRecord>> watchTagLinks(String userId) {
@@ -503,19 +564,20 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
   }
 
   Future<bool> hasAnyLocalBrowseData(String userId) async {
-    final collectibleCount = await customSelect(
-      'select count(*) as count from collectibles_local where user_id = ?',
+    final collectible = await customSelect(
+      'select 1 from collectibles_local where user_id = ? limit 1',
       variables: [Variable.withString(userId)],
       readsFrom: {collectiblesLocal},
-    ).getSingle();
-    final wishlistCount = await customSelect(
-      'select count(*) as count from wishlist_items_local where user_id = ?',
+    ).getSingleOrNull();
+    if (collectible != null) {
+      return true;
+    }
+    final wishlist = await customSelect(
+      'select 1 from wishlist_items_local where user_id = ? limit 1',
       variables: [Variable.withString(userId)],
       readsFrom: {wishlistItemsLocal},
-    ).getSingle();
-    final collectibleValue = collectibleCount.data['count'] as int? ?? 0;
-    final wishlistValue = wishlistCount.data['count'] as int? ?? 0;
-    return collectibleValue > 0 || wishlistValue > 0;
+    ).getSingleOrNull();
+    return wishlist != null;
   }
 
   Future<void> replaceSnapshot(ArchiveSyncSnapshot snapshot) async {

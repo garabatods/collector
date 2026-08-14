@@ -65,14 +65,20 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
   var _isUploadingAvatar = false;
   var _badgeFilter = _BadgeGalleryFilter.unlocked;
   List<CollectorBadgeAward> _badgeAwards = const [];
+  List<CollectorBadgeAward> _pendingBadgeAwards = const [];
+  String? _lastBadgeUserId;
   String? _lastBadgeSignature;
   var _hasAttemptedCollectorStatusIntro = false;
+  var _isShowingBadgeUnlockSheet = false;
 
   @override
   void didUpdateWidget(covariant CollectionProfileScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.refreshSeed != widget.refreshSeed) {
       _archiveRepository.syncIfNeeded(force: true);
+    }
+    if (widget.isActive && !oldWidget.isActive) {
+      _tryShowPendingBadgeAwards();
     }
   }
 
@@ -417,7 +423,13 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
 
   void _scheduleBadgeSync(ArchiveProfileSummary summary) {
     final progress = CollectorProgressSnapshot.fromProfileSummary(summary);
-    final signature = CollectorBadgeEngine.buildSignature(progress);
+    final signature =
+        '${summary.userId}:${CollectorBadgeEngine.buildSignature(progress)}';
+    if (_lastBadgeUserId != summary.userId) {
+      _lastBadgeUserId = summary.userId;
+      _lastBadgeSignature = null;
+      _badgeAwards = const [];
+    }
     if (_lastBadgeSignature == signature) {
       return;
     }
@@ -425,7 +437,10 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final unlocked = CollectorBadgeEngine.unlockedBadges(progress);
-      final syncResult = await _badgeAwardStore.syncUnlocked(unlocked);
+      final syncResult = await _badgeAwardStore.syncUnlocked(
+        summary.userId,
+        unlocked,
+      );
       if (!mounted) {
         return;
       }
@@ -436,18 +451,68 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
         return;
       }
       if (syncResult.newAwards.isNotEmpty) {
+        _queueBadgeAwards(syncResult.newAwards);
+        return;
+      }
+
+      await _maybeShowCollectorStatusIntro(summary);
+    });
+  }
+
+  void _queueBadgeAwards(List<CollectorBadgeAward> awards) {
+    if (awards.isEmpty) {
+      return;
+    }
+
+    final pendingById = {
+      for (final award in _pendingBadgeAwards) award.badge.id: award,
+    };
+    for (final award in awards) {
+      pendingById[award.badge.id] = award;
+    }
+    _pendingBadgeAwards = pendingById.values.toList(growable: false);
+    _tryShowPendingBadgeAwards();
+  }
+
+  void _tryShowPendingBadgeAwards() {
+    if (_isShowingBadgeUnlockSheet ||
+        _pendingBadgeAwards.isEmpty ||
+        !widget.isActive ||
+        !(ModalRoute.of(context)?.isCurrent ?? false)) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted ||
+          _isShowingBadgeUnlockSheet ||
+          _pendingBadgeAwards.isEmpty ||
+          !widget.isActive ||
+          !(ModalRoute.of(context)?.isCurrent ?? false)) {
+        return;
+      }
+
+      final awards = _pendingBadgeAwards;
+      setState(() {
+        _pendingBadgeAwards = const [];
+        _isShowingBadgeUnlockSheet = true;
+      });
+
+      try {
         CollectorHaptics.medium();
         await showModalBottomSheet<void>(
           context: context,
           isScrollControlled: true,
           backgroundColor: Colors.transparent,
-          builder: (context) =>
-              CollectorBadgeUnlockSheet(awards: syncResult.newAwards),
+          builder: (context) => CollectorBadgeUnlockSheet(awards: awards),
         );
-        return;
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isShowingBadgeUnlockSheet = false;
+          });
+          _tryShowPendingBadgeAwards();
+        }
       }
-
-      await _maybeShowCollectorStatusIntro(summary);
     });
   }
 

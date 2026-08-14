@@ -21,15 +21,18 @@ class CollectorBadgeAwardStore {
   CollectorBadgeAwardStore._();
 
   static final instance = CollectorBadgeAwardStore._();
-  static const _fileName = 'collector_badge_awards.json';
+  static const _legacyFileName = 'collector_badge_awards.json';
   Future<void> _syncQueue = Future<void>.value();
 
   Future<CollectorBadgeSyncResult> syncUnlocked(
+    String userId,
     List<CollectorBadgeDefinition> unlocked,
   ) async {
     return _runSyncLocked(() async {
-      final existing = await _readRawAwards();
+      final existingSnapshot = await _readRawAwards(userId);
+      final existing = Map<String, String>.of(existingSnapshot.awards);
       var didChange = false;
+      final shouldReportNewAwards = existingSnapshot.canReportNewAwards;
       final newKeys = <String>{};
 
       for (final badge in unlocked) {
@@ -41,11 +44,14 @@ class CollectorBadgeAwardStore {
         }
       }
 
-      if (didChange) {
+      if (didChange || !existingSnapshot.exists) {
         try {
-          final file = await _awardsFile();
+          final file = await _awardsFile(userId);
           await file.writeAsString(
-            jsonEncode(<String, Object?>{'awards': existing}),
+            jsonEncode(<String, Object?>{
+              'initialized_for_notifications': true,
+              'awards': existing,
+            }),
           );
         } catch (_) {
           // Ignore persistence issues. Badges should still render from current data.
@@ -53,42 +59,68 @@ class CollectorBadgeAwardStore {
       }
 
       final awards = _toAwards(existing);
-      final newAwards = awards
-          .where((award) => newKeys.contains(award.badge.id.name))
-          .toList(growable: false);
+      final newAwards = shouldReportNewAwards
+          ? awards
+                .where((award) => newKeys.contains(award.badge.id.name))
+                .toList(growable: false)
+          : const <CollectorBadgeAward>[];
 
       return CollectorBadgeSyncResult(awards: awards, newAwards: newAwards);
     });
   }
 
-  Future<List<CollectorBadgeAward>> readAwards() async {
-    final raw = await _readRawAwards();
-    return _toAwards(raw);
+  Future<List<CollectorBadgeAward>> readAwards(String userId) async {
+    final snapshot = await _readRawAwards(userId);
+    return _toAwards(snapshot.awards);
   }
 
-  Future<Map<String, String>> _readRawAwards() async {
+  Future<_RawBadgeAwardSnapshot> _readRawAwards(String userId) async {
     try {
-      final file = await _awardsFile();
+      final file = await _awardsFile(userId);
       if (!await file.exists()) {
-        return <String, String>{};
+        return const _RawBadgeAwardSnapshot(
+          awards: <String, String>{},
+          exists: false,
+          canReportNewAwards: false,
+        );
       }
 
       final raw = await file.readAsString();
       final decoded = jsonDecode(raw);
       if (decoded is! Map<String, Object?>) {
-        return <String, String>{};
+        return const _RawBadgeAwardSnapshot(
+          awards: <String, String>{},
+          exists: true,
+          canReportNewAwards: false,
+        );
       }
 
       final awards = decoded['awards'];
       if (awards is! Map) {
-        return <String, String>{};
+        return const _RawBadgeAwardSnapshot(
+          awards: <String, String>{},
+          exists: true,
+          canReportNewAwards: false,
+        );
       }
 
-      return awards.map(
+      final parsedAwards = awards.map(
         (key, value) => MapEntry(key.toString(), value?.toString() ?? ''),
       );
+      final hasInitializedNotifications =
+          decoded['initialized_for_notifications'] == true;
+      return _RawBadgeAwardSnapshot(
+        awards: parsedAwards,
+        exists: true,
+        canReportNewAwards:
+            hasInitializedNotifications || parsedAwards.isNotEmpty,
+      );
     } catch (_) {
-      return <String, String>{};
+      return const _RawBadgeAwardSnapshot(
+        awards: <String, String>{},
+        exists: false,
+        canReportNewAwards: false,
+      );
     }
   }
 
@@ -116,9 +148,13 @@ class CollectorBadgeAwardStore {
     return awards;
   }
 
-  Future<File> _awardsFile() async {
+  Future<File> _awardsFile(String userId) async {
     final directory = await getApplicationDocumentsDirectory();
-    return File(p.join(directory.path, _fileName));
+    final safeUserId = userId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    final fileName = safeUserId.isEmpty
+        ? _legacyFileName
+        : 'collector_badge_awards_$safeUserId.json';
+    return File(p.join(directory.path, fileName));
   }
 
   Future<T> _runSyncLocked<T>(Future<T> Function() action) {
@@ -136,4 +172,16 @@ class CollectorBadgeAwardStore {
         });
     return result.future;
   }
+}
+
+class _RawBadgeAwardSnapshot {
+  const _RawBadgeAwardSnapshot({
+    required this.awards,
+    required this.exists,
+    required this.canReportNewAwards,
+  });
+
+  final Map<String, String> awards;
+  final bool exists;
+  final bool canReportNewAwards;
 }

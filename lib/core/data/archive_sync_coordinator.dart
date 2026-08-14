@@ -38,6 +38,7 @@ class ArchiveSyncCoordinator {
 
   String? _activeUserId;
   Future<void>? _inFlightSync;
+  String? _inFlightUserId;
   final Map<String, DateTime> _lastPhotoCacheRepairAt = {};
 
   String? get currentUserId => _client.auth.currentUser?.id;
@@ -57,6 +58,10 @@ class ArchiveSyncCoordinator {
     }
 
     _activeUserId = userId;
+    status.value = const SyncStatus(
+      isSyncing: true,
+      message: 'Loading your archive…',
+    );
     final hasLocalData = await _database.hasAnyLocalBrowseData(userId);
     final syncState = await _database.getSyncState(userId);
     status.value = SyncStatus(
@@ -76,23 +81,29 @@ class ArchiveSyncCoordinator {
   }
 
   Future<void> syncIfNeeded({bool force = false}) {
+    final userId = _activeUserId ?? currentUserId;
+    if (userId == null || userId.isEmpty) {
+      return Future<void>.value();
+    }
+
     final existingSync = _inFlightSync;
-    if (existingSync != null) {
+    if (existingSync != null && _inFlightUserId == userId) {
       return existingSync;
     }
 
-    final future = _runSync(force: force);
+    final future = _runSync(userId: userId, force: force);
     _inFlightSync = future;
+    _inFlightUserId = userId;
     return future.whenComplete(() {
       if (identical(_inFlightSync, future)) {
         _inFlightSync = null;
+        _inFlightUserId = null;
       }
     });
   }
 
-  Future<void> _runSync({required bool force}) async {
-    final userId = _activeUserId ?? currentUserId;
-    if (userId == null || userId.isEmpty) {
+  Future<void> _runSync({required String userId, required bool force}) async {
+    if (!_isCurrentSyncUser(userId)) {
       return;
     }
 
@@ -106,13 +117,15 @@ class ArchiveSyncCoordinator {
       return;
     }
 
-    status.value = status.value.copyWith(
-      isSyncing: true,
-      isOffline: false,
-      hasLocalData: hasLocalData,
-      hasCompletedInitialSync: syncState?.hasCompletedInitialSync ?? false,
-      message: hasLocalData ? 'Refreshing archive…' : 'Loading your archive…',
-    );
+    if (_isCurrentSyncUser(userId)) {
+      status.value = status.value.copyWith(
+        isSyncing: true,
+        isOffline: false,
+        hasLocalData: hasLocalData,
+        hasCompletedInitialSync: syncState?.hasCompletedInitialSync ?? false,
+        message: hasLocalData ? 'Refreshing archive…' : 'Loading your archive…',
+      );
+    }
 
     try {
       String? remoteSyncStamp;
@@ -142,12 +155,15 @@ class ArchiveSyncCoordinator {
           lastSyncAt: syncState?.lastSyncAt,
           hasCompletedInitialSync: syncState?.hasCompletedInitialSync ?? false,
         );
-        status.value = SyncStatus(
-          hasLocalData: hasLocalData,
-          hasCompletedInitialSync: syncState?.hasCompletedInitialSync ?? false,
-          lastSyncAt: syncState?.lastSyncAt,
-        );
-        _reconcileLocalPrimaryPhotoCache(userId);
+        if (_isCurrentSyncUser(userId)) {
+          status.value = SyncStatus(
+            hasLocalData: hasLocalData,
+            hasCompletedInitialSync:
+                syncState?.hasCompletedInitialSync ?? false,
+            lastSyncAt: syncState?.lastSyncAt,
+          );
+          _reconcileLocalPrimaryPhotoCache(userId);
+        }
         return;
       }
 
@@ -159,11 +175,13 @@ class ArchiveSyncCoordinator {
       );
       final refreshedHasLocalData =
           snapshot.collectibles.isNotEmpty || snapshot.wishlistItems.isNotEmpty;
-      status.value = SyncStatus(
-        hasLocalData: refreshedHasLocalData,
-        hasCompletedInitialSync: true,
-        lastSyncAt: DateTime.now(),
-      );
+      if (_isCurrentSyncUser(userId)) {
+        status.value = SyncStatus(
+          hasLocalData: refreshedHasLocalData,
+          hasCompletedInitialSync: true,
+          lastSyncAt: DateTime.now(),
+        );
+      }
     } catch (error) {
       if (kDebugMode) {
         debugPrint('Archive sync failed: $error');
@@ -179,20 +197,26 @@ class ArchiveSyncCoordinator {
         lastSyncAt: syncState?.lastSyncAt,
         hasCompletedInitialSync: syncState?.hasCompletedInitialSync ?? false,
       );
-      status.value = SyncStatus(
-        hasLocalData: hasLocalData,
-        isOffline: isOffline,
-        hasCompletedInitialSync: syncState?.hasCompletedInitialSync ?? false,
-        lastSyncAt: syncState?.lastSyncAt,
-        message: isOffline
-            ? (hasLocalData
-                  ? 'Showing saved archive while sync is unavailable.'
-                  : 'Offline. Connect once to download your archive.')
-            : (hasLocalData
-                  ? 'Could not refresh your archive right now.'
-                  : 'Could not download your archive right now.'),
-      );
+      if (_isCurrentSyncUser(userId)) {
+        status.value = SyncStatus(
+          hasLocalData: hasLocalData,
+          isOffline: isOffline,
+          hasCompletedInitialSync: syncState?.hasCompletedInitialSync ?? false,
+          lastSyncAt: syncState?.lastSyncAt,
+          message: isOffline
+              ? (hasLocalData
+                    ? 'Showing saved archive while sync is unavailable.'
+                    : 'Offline. Connect once to download your archive.')
+              : (hasLocalData
+                    ? 'Could not refresh your archive right now.'
+                    : 'Could not download your archive right now.'),
+        );
+      }
     }
+  }
+
+  bool _isCurrentSyncUser(String userId) {
+    return _activeUserId == userId && currentUserId == userId;
   }
 
   void _reconcileLocalPrimaryPhotoCache(String userId) {

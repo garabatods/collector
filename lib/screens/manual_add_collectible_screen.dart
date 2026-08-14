@@ -342,8 +342,8 @@ class _ManualAddCollectibleScreenState
   Future<void> _loadSuggestions() async {
     try {
       final results = await Future.wait([
-        _repository.fetchAll(),
-        _tagsRepository.fetchAll(),
+        _repository.fetchAllLocal(),
+        _tagsRepository.fetchAllLocal(),
       ]);
       final collectibles = results[0] as List<CollectibleModel>;
       final tags = results[1] as List<TagModel>;

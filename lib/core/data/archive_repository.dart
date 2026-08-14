@@ -56,6 +56,7 @@ class ArchiveRepository {
             .take(6)
             .toList(growable: false);
         return ArchiveHomeSummary(
+          userId: userId,
           profile: profile,
           collectibles: collectibles,
           wishlistCount: wishlistItems.length,
@@ -238,6 +239,7 @@ class ArchiveRepository {
             )
             .length;
         return ArchiveProfileSummary(
+          userId: userId,
           profile: profile,
           email: currentUser?.email,
           totalItems: collectibles.length,

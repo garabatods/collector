@@ -60,8 +60,8 @@ class _AiPhotoIdentificationScreenState
   Future<void> _pickImage(ImageSource source) async {
     final image = await _picker.pickImage(
       source: source,
-      imageQuality: 86,
-      maxWidth: 1800,
+      imageQuality: 92,
+      maxWidth: 2400,
     );
     if (!mounted || image == null) {
       return;
@@ -106,12 +106,12 @@ class _AiPhotoIdentificationScreenState
 
       setState(() {
         _result = result;
-        _phase = result.hasCatalogMatch
+        _phase = result.hasSuggestedMatch
             ? _AiPhotoPhase.found
             : result.isNotFound
             ? _AiPhotoPhase.notFound
             : _AiPhotoPhase.failed;
-        _message = result.hasCatalogMatch
+        _message = result.hasSuggestedMatch
             ? null
             : result.isNotFound
             ? 'We could not confidently identify this piece yet. You can still continue and finish the details yourself.'
@@ -308,8 +308,10 @@ class _AiPhotoIdentificationScreenState
                             Text(
                               phase == _AiPhotoPhase.identifying
                                   ? 'AI is examining the collectible'
-                                  : result?.hasCatalogMatch == true
-                                  ? 'AI identification result'
+                                  : result?.hasSuggestedMatch == true
+                                  ? result!.isPartial
+                                        ? 'Possible AI match'
+                                        : 'AI identification result'
                                   : _hasImage
                                   ? 'AI could not confirm the item'
                                   : 'Start with a photo',
@@ -319,8 +321,10 @@ class _AiPhotoIdentificationScreenState
                             Text(
                               phase == _AiPhotoPhase.identifying
                                   ? 'We are identifying the piece and enriching it when it looks comic-related.'
-                                  : result?.hasCatalogMatch == true
-                                  ? 'Review the strongest match, then continue to confirm or refine the details.'
+                                  : result?.hasSuggestedMatch == true
+                                  ? result!.isPartial
+                                        ? 'AI found a likely candidate but could not prove the exact edition. Review and edit anything that does not look right.'
+                                        : 'Review the strongest match, then continue to confirm or refine the details.'
                                   : _hasImage
                                   ? (_message ??
                                         'You can still continue manually with the selected photo.')
@@ -331,7 +335,7 @@ class _AiPhotoIdentificationScreenState
                             if (phase == _AiPhotoPhase.identifying) ...[
                               const SizedBox(height: AppSpacing.md),
                               const _AiLoadingCard(),
-                            ] else if (result?.hasCatalogMatch == true) ...[
+                            ] else if (result?.hasSuggestedMatch == true) ...[
                               const SizedBox(height: AppSpacing.md),
                               _AiResultCard(result: result!),
                               if (_hasImage) ...[
@@ -365,11 +369,13 @@ class _AiPhotoIdentificationScreenState
                               ),
                             ],
                             const SizedBox(height: AppSpacing.xl),
-                            if (result?.hasCatalogMatch == true) ...[
+                            if (result?.hasSuggestedMatch == true) ...[
                               SizedBox(
                                 width: double.infinity,
                                 child: CollectorButton(
-                                  label: 'Add details',
+                                  label: result!.isPartial
+                                      ? 'Review possible match'
+                                      : 'Add details',
                                   onPressed: _continueToManualAdd,
                                 ),
                               ),
@@ -658,6 +664,7 @@ class _AiResultCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final confidence = result.confidence;
     final imageUrl = (result.imageUrl ?? '').trim();
+    final badge = result.isPartial ? 'Possible match' : result.sourceBadge;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpacing.md),
@@ -681,7 +688,7 @@ class _AiResultCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
-                  result.sourceBadge.toUpperCase(),
+                  badge.toUpperCase(),
                   style: Theme.of(
                     context,
                   ).textTheme.labelSmall?.copyWith(color: AppColors.primary),
@@ -810,7 +817,9 @@ class _PhotoChoiceCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceContainerHighest.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.outlineVariant.withValues(alpha: 0.18)),
+        border: Border.all(
+          color: AppColors.outlineVariant.withValues(alpha: 0.18),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -821,9 +830,9 @@ class _PhotoChoiceCard extends StatelessWidget {
             suggestedPhotoAvailable
                 ? 'Choose whether to keep the catalog image or save the photo you just took.'
                 : 'The suggested catalog photo is not very useful here, so your photo will be saved by default.',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: AppColors.onSurfaceVariant,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
           ),
           const SizedBox(height: AppSpacing.md),
           Wrap(

@@ -19,6 +19,10 @@ class TagsRepository extends SupabaseRepository {
     return asJsonList(data).map(TagModel.fromJson).toList(growable: false);
   }
 
+  Future<List<TagModel>> fetchAllLocal() {
+    return _localDatabase.getTags(currentUserId);
+  }
+
   Future<TagModel> create(String name) async {
     await ensureOnlineForWrite();
     final data = await client

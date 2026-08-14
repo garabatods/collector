@@ -99,10 +99,16 @@ class CollectibleIdentificationResult {
 
   bool get hasCatalogMatch =>
       status == CollectibleIdentificationStatus.matched ||
-      status == CollectibleIdentificationStatus.enriched ||
-      status == CollectibleIdentificationStatus.partial;
+      status == CollectibleIdentificationStatus.enriched;
 
-  bool get isNotFound => status == CollectibleIdentificationStatus.notFound;
+  bool get isPartial => status == CollectibleIdentificationStatus.partial;
+
+  bool get hasSuggestedMatch =>
+      hasCatalogMatch || (isPartial && hasPrefillData);
+
+  bool get isNotFound =>
+      status == CollectibleIdentificationStatus.notFound ||
+      (isPartial && !hasPrefillData);
 
   bool get isFailure => status == CollectibleIdentificationStatus.failed;
 

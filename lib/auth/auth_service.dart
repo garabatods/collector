@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+const _authEmailRedirectUrl = 'ownzith://auth/callback';
+
 class AuthService {
   AuthService({
     required bool isConfigured,
@@ -39,6 +41,24 @@ class AuthService {
     return Supabase.instance.client.auth.signUp(
       email: email,
       password: password,
+      emailRedirectTo: _authEmailRedirectUrl,
+    );
+  }
+
+  Future<void> sendPasswordResetEmail({
+    required String email,
+  }) {
+    return Supabase.instance.client.auth.resetPasswordForEmail(
+      email,
+      redirectTo: _authEmailRedirectUrl,
+    );
+  }
+
+  Future<UserResponse> updatePassword({
+    required String password,
+  }) {
+    return Supabase.instance.client.auth.updateUser(
+      UserAttributes(password: password),
     );
   }
 

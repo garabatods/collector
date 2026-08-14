@@ -13,8 +13,11 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
   CollectibleIdentificationRepository({super.client});
 
   static const _cachePrefix = 'identification:';
+  static const _photoCacheVersion = 'luna-terra-v1';
 
-  Future<CollectibleIdentificationResult> identifyBarcode(String barcode) async {
+  Future<CollectibleIdentificationResult> identifyBarcode(
+    String barcode,
+  ) async {
     final normalizedBarcode = _normalizeBarcode(barcode);
     if (normalizedBarcode.isEmpty) {
       return const CollectibleIdentificationResult(
@@ -34,10 +37,7 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
 
     try {
       final response = await _invokeIdentifyCollectible(
-        body: {
-          'mode': 'barcode',
-          'barcode': normalizedBarcode,
-        },
+        body: {'mode': 'barcode', 'barcode': normalizedBarcode},
       );
 
       final result = CollectibleIdentificationResult.fromJson(
@@ -71,7 +71,7 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
     }
 
     final fingerprint = sha256.convert(imageBytes).toString();
-    final cacheKey = '${_cachePrefix}photo:$fingerprint';
+    final cacheKey = '${_cachePrefix}photo:$_photoCacheVersion:$fingerprint';
     final cached = SessionCache.get<CollectibleIdentificationResult>(cacheKey);
     if (cached != null) {
       return cached;
@@ -110,7 +110,7 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
   }
 
   static String photoSessionKey(Uint8List imageBytes) {
-    return '${_cachePrefix}photo:${sha256.convert(imageBytes)}';
+    return '${_cachePrefix}photo:$_photoCacheVersion:${sha256.convert(imageBytes)}';
   }
 
   static String _normalizeBarcode(String barcode) {

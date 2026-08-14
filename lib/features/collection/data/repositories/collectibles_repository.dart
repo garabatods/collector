@@ -25,6 +25,10 @@ class CollectiblesRepository extends SupabaseRepository {
     );
   }
 
+  Future<List<CollectibleModel>> fetchAllLocal() {
+    return _localDatabase.getCollectibles(currentUserId);
+  }
+
   Future<List<CollectibleModel>> fetchRecent({int limit = 6}) async {
     final data = await client
         .from('collectibles')

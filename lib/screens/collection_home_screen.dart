@@ -193,7 +193,9 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
   HomeCollectionInsightHistory? _insightHistory;
   HomeCollectionInsight? _selectedInsight;
   List<CollectorGoal> _collectorGoals = const [];
+  List<CollectorBadgeAward> _pendingBadgeAwards = const [];
   bool _isResolvingInsight = true;
+  bool _isShowingBadgeUnlockSheet = false;
   String? _pendingGamificationSignature;
 
   @override
@@ -221,6 +223,9 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
     if (widget.isActive &&
         (oldWidget.data != widget.data || !oldWidget.isActive)) {
       _syncGamification();
+    }
+    if (widget.isActive && !oldWidget.isActive) {
+      _tryShowPendingBadgeAwards();
     }
     if ((oldWidget.scrollRequest ?? 0) != (widget.scrollRequest ?? 0) &&
         widget.scrollTarget != null) {
@@ -559,7 +564,8 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
 
   Future<void> _syncGamification() async {
     final progress = CollectorProgressSnapshot.fromHomeSummary(widget.data);
-    final progressSignature = CollectorBadgeEngine.buildSignature(progress);
+    final progressSignature =
+        '${widget.data.userId}:${CollectorBadgeEngine.buildSignature(progress)}';
     if (_pendingGamificationSignature == progressSignature) {
       return;
     }
@@ -567,7 +573,10 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
 
     try {
       final unlockedBadges = CollectorBadgeEngine.unlockedBadges(progress);
-      final syncResult = await _badgeAwardStore.syncUnlocked(unlockedBadges);
+      final syncResult = await _badgeAwardStore.syncUnlocked(
+        widget.data.userId,
+        unlockedBadges,
+      );
       if (!mounted) {
         return;
       }
@@ -583,26 +592,77 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
         _collectorGoals = goals;
       });
 
-      if (!widget.isActive || syncResult.newAwards.isEmpty) {
+      if (syncResult.newAwards.isEmpty) {
         return;
       }
 
-      CollectorHaptics.medium();
-      await showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (context) => CollectorBadgeUnlockSheet(
-          awards: syncResult.newAwards,
-          primaryActionLabel: 'View Badges',
-          onPrimaryAction: widget.onOpenProfile,
-        ),
-      );
+      _queueBadgeAwards(syncResult.newAwards);
     } finally {
       if (_pendingGamificationSignature == progressSignature) {
         _pendingGamificationSignature = null;
       }
     }
+  }
+
+  void _queueBadgeAwards(List<CollectorBadgeAward> awards) {
+    if (awards.isEmpty) {
+      return;
+    }
+
+    final pendingById = {
+      for (final award in _pendingBadgeAwards) award.badge.id: award,
+    };
+    for (final award in awards) {
+      pendingById[award.badge.id] = award;
+    }
+    _pendingBadgeAwards = pendingById.values.toList(growable: false);
+    _tryShowPendingBadgeAwards();
+  }
+
+  void _tryShowPendingBadgeAwards() {
+    if (_isShowingBadgeUnlockSheet ||
+        _pendingBadgeAwards.isEmpty ||
+        !widget.isActive ||
+        !(ModalRoute.of(context)?.isCurrent ?? false)) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted ||
+          _isShowingBadgeUnlockSheet ||
+          _pendingBadgeAwards.isEmpty ||
+          !widget.isActive ||
+          !(ModalRoute.of(context)?.isCurrent ?? false)) {
+        return;
+      }
+
+      final awards = _pendingBadgeAwards;
+      setState(() {
+        _pendingBadgeAwards = const [];
+        _isShowingBadgeUnlockSheet = true;
+      });
+
+      try {
+        CollectorHaptics.medium();
+        await showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (context) => CollectorBadgeUnlockSheet(
+            awards: awards,
+            primaryActionLabel: 'View Badges',
+            onPrimaryAction: widget.onOpenProfile,
+          ),
+        );
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isShowingBadgeUnlockSheet = false;
+          });
+          _tryShowPendingBadgeAwards();
+        }
+      }
+    });
   }
 
   Future<void> _resolveInsight() async {
