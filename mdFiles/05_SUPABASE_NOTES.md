@@ -9,7 +9,8 @@
 - profiles
 - collectibles
 - collectible_photos
-- wishlist_items
+- user_entitlements
+- feature_usage_events
 
 ## Security direction
 - Enable Row Level Security on app tables

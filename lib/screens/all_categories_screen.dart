@@ -9,7 +9,6 @@ import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/category_icon.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
-import '../widgets/collector_sticky_back_button.dart';
 import '../widgets/collector_text_field.dart';
 import 'category_collection_screen.dart';
 
@@ -104,15 +103,22 @@ class _AllCategoriesScreenState extends State<AllCategoriesScreen> {
                   final data = snapshot.data;
 
                   if (snapshot.hasError && data == null) {
-                    return const _AllCategoriesMessage(
-                      title: 'Could not load categories.',
-                      description: 'Try again once your archive is connected.',
+                    return _AllCategoriesFallbackPage(
+                      onBack: _handleBack,
+                      child: const _AllCategoriesMessage(
+                        title: 'Could not load categories.',
+                        description:
+                            'Try again once your archive is connected.',
+                      ),
                     );
                   }
 
                   if (data == null) {
-                    return const CollectorLoadingOverlay(
-                      label: 'Loading categories...',
+                    return _AllCategoriesFallbackPage(
+                      onBack: _handleBack,
+                      child: const CollectorLoadingOverlay(
+                        label: 'Loading categories...',
+                      ),
                     );
                   }
 
@@ -122,24 +128,36 @@ class _AllCategoriesScreenState extends State<AllCategoriesScreen> {
                   return Padding(
                     padding: const EdgeInsets.fromLTRB(
                       AppSpacing.md,
-                      72,
+                      AppSpacing.xs,
                       AppSpacing.md,
                       AppSpacing.lg,
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Categories',
-                          style: Theme.of(context).textTheme.headlineLarge,
+                        SizedBox(
+                          height: 48,
+                          child: Row(
+                            children: [
+                              IconButton(
+                                tooltip: 'Back',
+                                onPressed: _handleBack,
+                                icon: const Icon(Icons.arrow_back_rounded),
+                                color: AppColors.primary,
+                              ),
+                              const SizedBox(width: AppSpacing.xs),
+                              Expanded(
+                                child: Text(
+                                  'Categories',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.titleLarge,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                         const SizedBox(height: AppSpacing.sm),
-                        Text(
-                          '${categories.length} ${categories.length == 1 ? 'shelf' : 'shelves'} in your collection.',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: AppColors.onSurfaceVariant),
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
                         CollectorSearchField(
                           hintText: 'Search categories',
                           controller: _searchController,
@@ -188,9 +206,50 @@ class _AllCategoriesScreenState extends State<AllCategoriesScreen> {
               ),
             ),
           ),
-          CollectorStickyBackButton(onPressed: _handleBack),
         ],
       ),
+    );
+  }
+}
+
+class _AllCategoriesFallbackPage extends StatelessWidget {
+  const _AllCategoriesFallbackPage({required this.onBack, required this.child});
+
+  final VoidCallback onBack;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            AppSpacing.xs,
+            AppSpacing.md,
+            0,
+          ),
+          child: SizedBox(
+            height: 48,
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: 'Back',
+                  onPressed: onBack,
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  color: AppColors.primary,
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                Text(
+                  'Categories',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ],
+            ),
+          ),
+        ),
+        Expanded(child: child),
+      ],
     );
   }
 }

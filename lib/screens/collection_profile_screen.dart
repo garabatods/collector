@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/collector_haptics.dart';
 import '../core/data/archive_repository.dart';
 import '../core/data/archive_types.dart';
-import '../core/data/feature_announcement_store.dart';
 import '../features/collection/data/models/collectible_model.dart';
+import '../features/access/data/account_access_service.dart';
+import '../features/access/data/collection_csv_export_service.dart';
+import '../features/access/data/models/account_access.dart';
+import '../features/access/data/revenuecat_service.dart';
+import '../features/access/presentation/pro_paywall_sheet.dart';
 import '../features/gamification/data/models/collector_badge.dart';
 import '../features/gamification/data/models/collector_level.dart';
 import '../features/gamification/data/services/collector_badge_award_store.dart';
@@ -16,13 +21,11 @@ import '../features/profile/data/repositories/profile_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
-import '../widgets/collector_badge_unlock_sheet.dart';
 import '../widgets/collector_bottom_sheet.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_loading_overlay.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/collector_snack_bar.dart';
-import '../widgets/collector_status_intro_sheet.dart';
 import '../widgets/collector_text_field.dart';
 import '../widgets/resolved_avatar_image.dart';
 import 'all_categories_screen.dart';
@@ -65,20 +68,26 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
   var _isUploadingAvatar = false;
   var _badgeFilter = _BadgeGalleryFilter.unlocked;
   List<CollectorBadgeAward> _badgeAwards = const [];
-  List<CollectorBadgeAward> _pendingBadgeAwards = const [];
   String? _lastBadgeUserId;
   String? _lastBadgeSignature;
-  var _hasAttemptedCollectorStatusIntro = false;
-  var _isShowingBadgeUnlockSheet = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _badgeAwardStore.revision.addListener(_handleBadgeAwardsChanged);
+  }
+
+  @override
+  void dispose() {
+    _badgeAwardStore.revision.removeListener(_handleBadgeAwardsChanged);
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant CollectionProfileScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.refreshSeed != widget.refreshSeed) {
       _archiveRepository.syncIfNeeded(force: true);
-    }
-    if (widget.isActive && !oldWidget.isActive) {
-      _tryShowPendingBadgeAwards();
     }
   }
 
@@ -99,7 +108,66 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
   }
 
   Future<void> _reload() async {
-    await _archiveRepository.syncIfNeeded(force: true);
+    await Future.wait([
+      _archiveRepository.syncIfNeeded(force: true),
+      AccountAccessService.instance.refresh(),
+    ]);
+  }
+
+  Future<void> _restorePurchases() async {
+    try {
+      final result = await RevenueCatService.restore();
+      await AccountAccessService.instance.refresh();
+      if (!mounted) return;
+      final restored =
+          result?.entitlements.active.containsKey(
+            RevenueCatService.entitlementId,
+          ) ??
+          false;
+      CollectorSnackBar.show(
+        context,
+        message: restored
+            ? 'Pro purchase restored.'
+            : 'No active Pro purchase was found for this Apple account.',
+        tone: restored
+            ? CollectorSnackBarTone.success
+            : CollectorSnackBarTone.info,
+      );
+    } catch (_) {
+      if (mounted) {
+        CollectorSnackBar.show(
+          context,
+          message: 'Purchases could not be restored right now.',
+          tone: CollectorSnackBarTone.error,
+        );
+      }
+    }
+  }
+
+  Future<void> _manageSubscription() async {
+    final url =
+        await RevenueCatService.managementUrl() ??
+        'https://apps.apple.com/account/subscriptions';
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _exportCollection() async {
+    try {
+      final renderBox = context.findRenderObject() as RenderBox?;
+      await CollectionCsvExportService.shareExport(
+        sharePositionOrigin: renderBox == null
+            ? null
+            : renderBox.localToGlobal(Offset.zero) & renderBox.size,
+      );
+    } catch (_) {
+      if (mounted) {
+        CollectorSnackBar.show(
+          context,
+          message: 'The collection export could not be created.',
+          tone: CollectorSnackBarTone.error,
+        );
+      }
+    }
   }
 
   Future<void> _openAllCategories() async {
@@ -401,12 +469,20 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
                                 'Keep the essentials nearby without crowding the top of the screen.',
                           ),
                           const SizedBox(height: AppSpacing.sm),
-                          _AccountSection(
-                            data: data,
-                            isSigningOut: _isSigningOut,
-                            onEditProfile: () =>
-                                _openEditProfileSheet(data.profile),
-                            onSignOut: _confirmSignOut,
+                          ValueListenableBuilder<AccountAccess>(
+                            valueListenable: AccountAccessService.instance,
+                            builder: (context, access, _) => _AccountSection(
+                              data: data,
+                              access: access,
+                              isSigningOut: _isSigningOut,
+                              onEditProfile: () =>
+                                  _openEditProfileSheet(data.profile),
+                              onUpgrade: () => showOwnzithPaywall(context),
+                              onRestore: _restorePurchases,
+                              onManageSubscription: _manageSubscription,
+                              onExport: _exportCollection,
+                              onSignOut: _confirmSignOut,
+                            ),
                           ),
                         ],
                       ),
@@ -447,104 +523,17 @@ class _CollectionProfileScreenState extends State<CollectionProfileScreen> {
       setState(() {
         _badgeAwards = syncResult.awards;
       });
-      if (!widget.isActive) {
-        return;
-      }
-      if (syncResult.newAwards.isNotEmpty) {
-        _queueBadgeAwards(syncResult.newAwards);
-        return;
-      }
-
-      await _maybeShowCollectorStatusIntro(summary);
     });
   }
 
-  void _queueBadgeAwards(List<CollectorBadgeAward> awards) {
-    if (awards.isEmpty) {
-      return;
-    }
-
-    final pendingById = {
-      for (final award in _pendingBadgeAwards) award.badge.id: award,
-    };
-    for (final award in awards) {
-      pendingById[award.badge.id] = award;
-    }
-    _pendingBadgeAwards = pendingById.values.toList(growable: false);
-    _tryShowPendingBadgeAwards();
-  }
-
-  void _tryShowPendingBadgeAwards() {
-    if (_isShowingBadgeUnlockSheet ||
-        _pendingBadgeAwards.isEmpty ||
-        !widget.isActive ||
-        !(ModalRoute.of(context)?.isCurrent ?? false)) {
-      return;
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted ||
-          _isShowingBadgeUnlockSheet ||
-          _pendingBadgeAwards.isEmpty ||
-          !widget.isActive ||
-          !(ModalRoute.of(context)?.isCurrent ?? false)) {
-        return;
-      }
-
-      final awards = _pendingBadgeAwards;
-      setState(() {
-        _pendingBadgeAwards = const [];
-        _isShowingBadgeUnlockSheet = true;
-      });
-
-      try {
-        CollectorHaptics.medium();
-        await showModalBottomSheet<void>(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (context) => CollectorBadgeUnlockSheet(awards: awards),
-        );
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isShowingBadgeUnlockSheet = false;
-          });
-          _tryShowPendingBadgeAwards();
-        }
+  void _handleBadgeAwardsChanged() {
+    if (!mounted) return;
+    _lastBadgeSignature = null;
+    _archiveRepository.watchProfileSummary().first.then((summary) {
+      if (mounted) {
+        _scheduleBadgeSync(summary);
       }
     });
-  }
-
-  Future<void> _maybeShowCollectorStatusIntro(
-    ArchiveProfileSummary summary,
-  ) async {
-    if (!widget.isActive ||
-        _hasAttemptedCollectorStatusIntro ||
-        summary.totalItems <= 0) {
-      return;
-    }
-
-    final dismissed =
-        await FeatureAnnouncementStore.isCollectorStatusIntroDismissed();
-    if (!mounted) {
-      return;
-    }
-
-    _hasAttemptedCollectorStatusIntro = true;
-    if (dismissed) {
-      return;
-    }
-
-    CollectorHaptics.light();
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => const CollectorStatusIntroSheet(),
-    );
-
-    await FeatureAnnouncementStore.dismissCollectorStatusIntro();
   }
 }
 
@@ -1046,23 +1035,133 @@ class _BadgesSection extends StatelessWidget {
   }
 }
 
+class _PlanUsagePanel extends StatelessWidget {
+  const _PlanUsagePanel({required this.access, required this.onUpgrade});
+
+  final AccountAccess access;
+  final VoidCallback onUpgrade;
+
+  @override
+  Widget build(BuildContext context) {
+    return CollectorPanel(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.9),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  access.isPro ? 'Ownzith Pro' : 'Ownzith Free',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              if (!access.isPro)
+                FilledButton(
+                  onPressed: onUpgrade,
+                  child: const Text('Upgrade'),
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          _UsageLine(
+            label: 'Archive',
+            value: '${access.itemCount} / ${access.itemLimit}',
+            progress: access.itemLimit == 0
+                ? 1
+                : access.itemCount / access.itemLimit,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          _UsageLine(
+            label: access.isPro ? 'PhotoID this month' : 'PhotoID trial',
+            value: '${access.photoIdRemaining} remaining',
+            progress: access.photoIdLimit == 0
+                ? 1
+                : 1 - (access.photoIdRemaining / access.photoIdLimit),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          _UsageLine(
+            label: 'UPC catalog this month',
+            value: access.isPro
+                ? '${access.upcRemaining} remaining'
+                : 'Pro only',
+            progress: access.upcLimit == 0
+                ? 0
+                : 1 - (access.upcRemaining / access.upcLimit),
+          ),
+          if (access.isPro) ...[
+            const SizedBox(height: AppSpacing.sm),
+            const Text(
+              'Standard personal-collection ceiling: 10,000 items.',
+              style: TextStyle(fontSize: 12, color: AppColors.onSurfaceVariant),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _UsageLine extends StatelessWidget {
+  const _UsageLine({
+    required this.label,
+    required this.value,
+    required this.progress,
+  });
+
+  final String label;
+  final String value;
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          Expanded(child: Text(label)),
+          Text(
+            value,
+            style: const TextStyle(color: AppColors.onSurfaceVariant),
+          ),
+        ],
+      ),
+      const SizedBox(height: AppSpacing.xs),
+      LinearProgressIndicator(value: progress.clamp(0, 1).toDouble()),
+    ],
+  );
+}
+
 class _AccountSection extends StatelessWidget {
   const _AccountSection({
     required this.data,
+    required this.access,
     required this.isSigningOut,
     required this.onEditProfile,
+    required this.onUpgrade,
+    required this.onRestore,
+    required this.onManageSubscription,
+    required this.onExport,
     required this.onSignOut,
   });
 
   final _ProfileScreenData data;
+  final AccountAccess access;
   final bool isSigningOut;
   final VoidCallback onEditProfile;
+  final VoidCallback onUpgrade;
+  final VoidCallback onRestore;
+  final VoidCallback onManageSubscription;
+  final VoidCallback onExport;
   final VoidCallback onSignOut;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
+        _PlanUsagePanel(access: access, onUpgrade: onUpgrade),
+        const SizedBox(height: AppSpacing.md),
         CollectorPanel(
           padding: const EdgeInsets.all(AppSpacing.md),
           backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.9),
@@ -1081,6 +1180,29 @@ class _AccountSection extends StatelessWidget {
                 title: 'Connected Account',
                 subtitle: data.email ?? 'No account email available',
               ),
+              const _AccountDivider(),
+              _AccountRow(
+                icon: Icons.download_outlined,
+                title: 'Export Collection',
+                subtitle: 'Create a CSV copy of your archive.',
+                onTap: onExport,
+              ),
+              const _AccountDivider(),
+              _AccountRow(
+                icon: Icons.restore_rounded,
+                title: 'Restore Purchases',
+                subtitle: 'Restore Pro from your Apple account.',
+                onTap: onRestore,
+              ),
+              if (access.isPro) ...[
+                const _AccountDivider(),
+                _AccountRow(
+                  icon: Icons.manage_accounts_outlined,
+                  title: 'Manage Subscription',
+                  subtitle: 'Change or cancel through Apple.',
+                  onTap: onManageSubscription,
+                ),
+              ],
               const _AccountDivider(),
               const _AccountRow(
                 icon: Icons.help_outline_rounded,

@@ -28,9 +28,9 @@ The first version should let a user:
 1. Add collectibles easily
 2. Browse their collection in a visual way
 3. View and edit item details
-4. Track wishlist items
-5. Mark favorites, grails, duplicates, and trade intent
-6. Upload at least one main photo per item
+4. Mark favorites, grails, duplicates, and trade intent
+5. Upload at least one main photo per item
+6. Export the collection as CSV
 
 ## Initial product scope
 ### In
@@ -40,7 +40,6 @@ The first version should let a user:
 - collectible detail
 - edit/delete collectible
 - one main photo per item
-- wishlist
 - favorites
 - grails
 - duplicates

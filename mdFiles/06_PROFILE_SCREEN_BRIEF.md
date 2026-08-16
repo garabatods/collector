@@ -7,7 +7,7 @@ It should help the user:
 - understand their collector identity
 - access account settings quickly
 - see collection-level highlights
-- reach wishlist, favorites, and trade-related areas faster
+- reach favorites, insights, and collection tools faster
 
 ## Product tone
 - premium
@@ -42,7 +42,7 @@ Use a compact summary row or card with stats such as:
 - total items
 - categories
 - favorites
-- wishlist items
+- PhotoID and UPC usage
 
 Optional later:
 - grails
@@ -64,7 +64,7 @@ This should be visually stronger than plain settings rows.
 ### 4. Quick actions
 Use clear shortcut tiles or list items for:
 - favorites
-- wishlist
+- collection export
 - categories
 - trade items
 - recently added
@@ -90,8 +90,8 @@ If we want a practical MVP profile screen, use:
 - total items
 - category count
 - favorites count
-- wishlist count
-- quick links to favorites and wishlist
+- Pro/Free usage summary
+- quick links to favorites and insights
 - edit profile
 - sign out
 
@@ -107,8 +107,8 @@ Likely data sources:
   - grail count
   - duplicate count
   - category count
-- `wishlist_items`
-  - wishlist total
+- `get_account_access()`
+  - plan, limits, and remaining usage
 
 ## Empty-state guidance
 If the user has little data:
@@ -139,7 +139,7 @@ Examples:
 ## Interaction suggestions
 - tap avatar to edit photo later
 - tap stat cards only if they lead somewhere useful
-- favorites and wishlist should be direct shortcuts
+- favorites and insights should be direct shortcuts
 - sign out should be visually separated from the rest
 
 ## Do not do
@@ -153,7 +153,7 @@ Examples:
 Build the screen in this order:
 1. profile header
 2. compact collection stats
-3. quick actions for favorites and wishlist
+3. quick actions for favorites and insights
 4. settings section
 5. one premium visual touch such as a featured collectible card or favorite category block
 

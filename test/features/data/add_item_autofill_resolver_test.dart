@@ -117,10 +117,10 @@ void main() {
       final result = resolver.resolveWithVocabulary(
         identificationResult: const CollectibleIdentificationResult(
           status: CollectibleIdentificationStatus.matched,
-          providerStage: CollectibleIdentificationProviderStage.comicvine,
+          providerStage: CollectibleIdentificationProviderStage.openai,
           source: CollectibleIdentificationSource.aiPhoto,
           title: 'Teenage Mutant Ninja Turtles: The Last Ronin Lost Years',
-          sourceBadge: 'ComicVine',
+          sourceBadge: 'AI identification',
           suggestedCategory: 'Comics',
           franchise: 'Teenage Mutant Ninja Turtles',
           comicContext: CollectibleIdentificationComicContext(

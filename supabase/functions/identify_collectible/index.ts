@@ -33,12 +33,13 @@ type UntypedSupabaseClient = SupabaseClient<any, "public", "public", any, any>;
 
 type LookupMode = "barcode" | "photo";
 type LookupStatus = "matched" | "enriched" | "partial" | "not_found" | "failed";
-type ProviderStage = "cache" | "upcitemdb" | "goupc" | "openai" | "comicvine";
+type ProviderStage = "cache" | "upcitemdb" | "goupc" | "metron" | "openai";
+type CachedProviderStage = ProviderStage | "comicvine";
 
 interface CacheRow {
   normalized_result: JsonMap;
   status: LookupStatus;
-  provider_stage: ProviderStage;
+  provider_stage: CachedProviderStage;
   raw_result: unknown;
   expires_at: string;
 }
@@ -47,6 +48,13 @@ interface ComicContext {
   issue_number: string | null;
   volume_name: string | null;
   publisher: string | null;
+}
+
+interface ComicBarcodeSupplement {
+  barcode: string;
+  issueNumber: number;
+  variantNumber: number;
+  printingNumber: number;
 }
 
 interface NormalizedIdentificationResult extends JsonMap {
@@ -74,10 +82,16 @@ interface ProviderMatch {
   rawResult: unknown;
 }
 
+interface UsageReservation {
+  adminClient: UntypedSupabaseClient;
+  userId: string;
+  requestId: string;
+  startedAt: number;
+}
+
 interface OpenAiPhotoResult {
   result: NormalizedIdentificationResult;
   rawResult: unknown;
-  isComicLike: boolean;
   detectedBarcode: string | null;
   isConfidentMatch: boolean;
 }
@@ -86,7 +100,6 @@ interface OpenAiPhotoAssessment {
   payload: JsonMap;
   parsed: JsonMap;
   result: NormalizedIdentificationResult;
-  isComicLike: boolean;
   detectedBarcode: string | null;
   visibleText: string[];
   identifyingMarkers: string[];
@@ -97,10 +110,20 @@ interface OpenAiPhotoAssessment {
 const upcItemDbEndpoint = "https://api.upcitemdb.com/prod/trial/lookup";
 const upcItemDbSearchEndpoint = "https://api.upcitemdb.com/prod/trial/search";
 const goUpcEndpoint = "https://go-upc.com/api/v1/code";
-const comicVineSearchEndpoint = "https://comicvine.gamespot.com/api/search/";
+const metronIssueEndpoint = "https://metron.cloud/api/issue/";
+const metronNotFoundCacheRefreshVersion = "metron-not-found-v1";
+const metronVariantCandidateLimit = 25;
+const metronSupplementConflictCacheTtlDays = 7;
 const openAiResponsesEndpoint = "https://api.openai.com/v1/responses";
 const defaultOpenAiPhotoPrimaryModel = "gpt-5.6-luna";
 const defaultOpenAiPhotoFallbackModel = "gpt-5.6-terra";
+const acceptedImageMimeTypes = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+]);
 const collectibleIdentificationSchema = {
   type: "object",
   additionalProperties: false,
@@ -185,6 +208,8 @@ Deno.serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  let reservedUsage: UsageReservation | null = null;
+
   try {
     const supabaseUrl = mustGetEnv("SUPABASE_URL");
     const supabaseAnonKey = mustGetEnv("SUPABASE_ANON_KEY");
@@ -220,14 +245,34 @@ Deno.serve(async (req) => {
 
     const payload = await req.json();
     const mode = asString(payload?.mode) as LookupMode | null;
+    const suppliedRequestId = asString(payload?.request_id);
+    const requestId = suppliedRequestId == null
+      ? crypto.randomUUID()
+      : normalizeRequestId(suppliedRequestId);
     if (mode !== "barcode" && mode !== "photo") {
       return jsonResponse(
         { error: "Expected mode to be either `barcode` or `photo`." },
         400,
       );
     }
+    if (!requestId) {
+      return jsonResponse({ error: "A valid request_id is required." }, 400);
+    }
 
     if (mode === "barcode") {
+      const access = await fetchAccountAccess(adminClient, userId);
+      if (
+        !asBoolean(access.is_pro) &&
+        asBoolean(access.usage_enforcement_enabled)
+      ) {
+        return jsonResponse(
+          {
+            error: "Barcode catalog lookup is included with Ownzith Pro.",
+            code: "pro_required",
+          },
+          402,
+        );
+      }
       const barcode = normalizeBarcode(asString(payload?.barcode));
       if (!barcode) {
         return jsonResponse(
@@ -241,6 +286,44 @@ Deno.serve(async (req) => {
         barcode,
       });
       if (sharedCached) {
+        const sanitizedMetronPartial = rebuildCachedMetronPartial(
+          sharedCached,
+          barcode,
+        );
+        if (sanitizedMetronPartial) {
+          await saveSharedBarcodeMatch({
+            adminClient,
+            barcode,
+            ttlDays: barcodeCacheTtlDays(sanitizedMetronPartial),
+            match: sanitizedMetronPartial,
+          });
+          await recordCacheHit(adminClient, userId, requestId, "upc_lookup");
+          return jsonResponse(sanitizedMetronPartial.result, 200);
+        }
+        const refreshLegacyNotFound = shouldRefreshCachedNotFoundWithMetron(
+          sharedCached,
+        );
+        const metronMatch = await refreshCachedComicWithMetron(
+          sharedCached,
+          barcode,
+        );
+        if (metronMatch) {
+          await saveSharedBarcodeMatch({
+            adminClient,
+            barcode,
+            ttlDays: barcodeCacheTtlDays(metronMatch),
+            match: metronMatch,
+          });
+          return jsonResponse(metronMatch.result, 200);
+        }
+        if (refreshLegacyNotFound) {
+          await saveSharedBarcodeCache({
+            adminClient,
+            barcode,
+            cached: markMetronNotFoundRefresh(sharedCached),
+          });
+        }
+        await recordCacheHit(adminClient, userId, requestId, "upc_lookup");
         return jsonResponse(cacheHit(sharedCached), 200);
       }
 
@@ -251,45 +334,87 @@ Deno.serve(async (req) => {
         lookupKey: barcode,
       });
       if (cached) {
+        const sanitizedMetronPartial = rebuildCachedMetronPartial(
+          cached,
+          barcode,
+        );
+        if (sanitizedMetronPartial) {
+          const ttlDays = barcodeCacheTtlDays(sanitizedMetronPartial);
+          await Promise.all([
+            saveCache({
+              adminClient,
+              userId,
+              lookupType: "barcode",
+              lookupKey: barcode,
+              ttlDays,
+              match: sanitizedMetronPartial,
+            }),
+            saveSharedBarcodeMatch({
+              adminClient,
+              barcode,
+              ttlDays,
+              match: sanitizedMetronPartial,
+            }),
+          ]);
+          await recordCacheHit(adminClient, userId, requestId, "upc_lookup");
+          return jsonResponse(sanitizedMetronPartial.result, 200);
+        }
+        const refreshLegacyNotFound = shouldRefreshCachedNotFoundWithMetron(
+          cached,
+        );
+        const metronMatch = await refreshCachedComicWithMetron(cached, barcode);
+        if (metronMatch) {
+          const ttlDays = barcodeCacheTtlDays(metronMatch);
+          await Promise.all([
+            saveCache({
+              adminClient,
+              userId,
+              lookupType: "barcode",
+              lookupKey: barcode,
+              ttlDays,
+              match: metronMatch,
+            }),
+            saveSharedBarcodeMatch({
+              adminClient,
+              barcode,
+              ttlDays,
+              match: metronMatch,
+            }),
+          ]);
+          return jsonResponse(metronMatch.result, 200);
+        }
+        if (refreshLegacyNotFound) {
+          await markIdentificationCacheMetronRefresh({
+            adminClient,
+            userId,
+            lookupType: "barcode",
+            lookupKey: barcode,
+            cached,
+          });
+        }
         await saveSharedBarcodeCache({
           adminClient,
           barcode,
           cached,
         });
+        await recordCacheHit(adminClient, userId, requestId, "upc_lookup");
         return jsonResponse(cacheHit(cached), 200);
       }
 
-      const upcItemDbMatch = await lookupUpcItemDb(barcode);
-      if (upcItemDbMatch) {
-        const ttlDays = identificationCacheTtlDays(
-          "barcode",
-          upcItemDbMatch.status,
-        );
-        await Promise.all([
-          saveCache({
-            adminClient,
-            userId,
-            lookupType: "barcode",
-            lookupKey: barcode,
-            ttlDays,
-            match: upcItemDbMatch,
-          }),
-          saveSharedBarcodeMatch({
-            adminClient,
-            barcode,
-            ttlDays,
-            match: upcItemDbMatch,
-          }),
-        ]);
-        return jsonResponse(upcItemDbMatch.result, 200);
+      const reservation = await reserveUsage({
+        adminClient,
+        userId,
+        requestId,
+        feature: "upc_lookup",
+      });
+      if (!reservation.allowed) {
+        return usageLimitResponse(reservation.reason);
       }
+      reservedUsage = { adminClient, userId, requestId, startedAt: Date.now() };
 
-      const goUpcMatch = await lookupGoUpc(barcode);
-      if (goUpcMatch) {
-        const ttlDays = identificationCacheTtlDays(
-          "barcode",
-          goUpcMatch.status,
-        );
+      const catalogMatch = await lookupBarcodeCatalog(barcode);
+      if (catalogMatch) {
+        const ttlDays = barcodeCacheTtlDays(catalogMatch);
         await Promise.all([
           saveCache({
             adminClient,
@@ -297,16 +422,21 @@ Deno.serve(async (req) => {
             lookupType: "barcode",
             lookupKey: barcode,
             ttlDays,
-            match: goUpcMatch,
+            match: catalogMatch,
           }),
           saveSharedBarcodeMatch({
             adminClient,
             barcode,
             ttlDays,
-            match: goUpcMatch,
+            match: catalogMatch,
           }),
         ]);
-        return jsonResponse(goUpcMatch.result, 200);
+        await finalizeReservedUsage(reservedUsage, true, {
+          provider: catalogMatch.providerStage,
+          outcome: catalogMatch.status,
+        });
+        reservedUsage = null;
+        return jsonResponse(catalogMatch.result, 200);
       }
 
       const miss = buildNotFoundResult({
@@ -323,10 +453,7 @@ Deno.serve(async (req) => {
           goupc: null,
         },
       };
-      const ttlDays = identificationCacheTtlDays(
-        "barcode",
-        missMatch.status,
-      );
+      const ttlDays = barcodeCacheTtlDays(missMatch);
       await Promise.all([
         saveCache({
           adminClient,
@@ -343,6 +470,11 @@ Deno.serve(async (req) => {
           match: missMatch,
         }),
       ]);
+      await finalizeReservedUsage(reservedUsage, true, {
+        provider: "goupc",
+        outcome: "not_found",
+      });
+      reservedUsage = null;
       return jsonResponse(miss, 200);
     }
 
@@ -352,6 +484,18 @@ Deno.serve(async (req) => {
       return jsonResponse(
         { error: "Photo mode requires image_base64 and mime_type." },
         400,
+      );
+    }
+    if (!acceptedImageMimeTypes.has(mimeType)) {
+      return jsonResponse(
+        { error: "Use a JPEG, PNG, WebP, HEIC, or HEIF image." },
+        400,
+      );
+    }
+    if (decodedBase64ByteLength(imageBase64) > 8 * 1024 * 1024) {
+      return jsonResponse(
+        { error: "The selected photo must be 8 MB or smaller." },
+        413,
       );
     }
 
@@ -372,8 +516,20 @@ Deno.serve(async (req) => {
       lookupKey: photoLookupKey,
     });
     if (cached) {
+      await recordCacheHit(adminClient, userId, requestId, "photo_id");
       return jsonResponse(cacheHit(cached), 200);
     }
+
+    const reservation = await reserveUsage({
+      adminClient,
+      userId,
+      requestId,
+      feature: "photo_id",
+    });
+    if (!reservation.allowed) {
+      return usageLimitResponse(reservation.reason);
+    }
+    reservedUsage = { adminClient, userId, requestId, startedAt: Date.now() };
 
     const barcodeHint = normalizeBarcode(asString(payload?.barcode));
     const openAiResult = await identifyPhotoWithOpenAi({
@@ -409,25 +565,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    if (
-      openAiResult.isComicLike && shouldTryComicEnrichment(finalMatch.result)
-    ) {
-      const comicEnriched = await enrichComicProviders(finalMatch.result);
-      if (comicEnriched) {
-        finalMatch = {
-          status: comicEnriched.result.title.trim().length === 0
-            ? "partial"
-            : "enriched",
-          providerStage: "comicvine",
-          result: comicEnriched.result,
-          rawResult: {
-            upstream: finalMatch.rawResult,
-            comicvine: comicEnriched.rawResult,
-          },
-        };
-      }
-    }
-
     await saveCache({
       adminClient,
       userId,
@@ -439,9 +576,26 @@ Deno.serve(async (req) => {
       match: finalMatch,
     });
 
+    const usage = collectOpenAiUsage(openAiResult.rawResult);
+    await finalizeReservedUsage(reservedUsage, true, {
+      provider: "openai",
+      model: usage.model,
+      fallback_used: usage.fallbackUsed,
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      outcome: finalMatch.status,
+      metadata: { provider_stage: finalMatch.providerStage },
+    });
+    reservedUsage = null;
+
     return jsonResponse(finalMatch.result, 200);
   } catch (error) {
     console.error("identify_collectible failed", error);
+    if (reservedUsage) {
+      await finalizeReservedUsage(reservedUsage, false, {
+        outcome: "provider_or_internal_error",
+      });
+    }
     return jsonResponse(
       {
         status: "failed",
@@ -454,6 +608,130 @@ Deno.serve(async (req) => {
     );
   }
 });
+
+function normalizeRequestId(value: string | null): string | null {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      .test(
+        normalized,
+      )
+    ? normalized
+    : null;
+}
+
+function decodedBase64ByteLength(value: string): number {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return Math.floor(value.length * 3 / 4) - padding;
+}
+
+async function fetchAccountAccess(
+  adminClient: UntypedSupabaseClient,
+  userId: string,
+): Promise<JsonMap> {
+  const { data, error } = await adminClient.rpc("get_account_access_for_user", {
+    target_user_id: userId,
+  });
+  if (error) throw error;
+  return asRecord(data) ?? {};
+}
+
+async function reserveUsage({
+  adminClient,
+  userId,
+  requestId,
+  feature,
+}: {
+  adminClient: UntypedSupabaseClient;
+  userId: string;
+  requestId: string;
+  feature: "photo_id" | "upc_lookup";
+}): Promise<{ allowed: boolean; reason: string | null }> {
+  const { data, error } = await adminClient.rpc("reserve_feature_usage", {
+    target_user_id: userId,
+    target_feature: feature,
+    target_request_id: requestId,
+  });
+  if (error) throw error;
+  const result = asRecord(data) ?? {};
+  return {
+    allowed: asBoolean(result.allowed),
+    reason: asString(result.reason),
+  };
+}
+
+async function recordCacheHit(
+  adminClient: UntypedSupabaseClient,
+  userId: string,
+  requestId: string,
+  feature: "photo_id" | "upc_lookup",
+) {
+  const { error } = await adminClient.rpc("record_free_feature_event", {
+    target_user_id: userId,
+    target_feature: feature,
+    target_request_id: requestId,
+    details: { provider: "cache", outcome: "cache_hit", duration_ms: 0 },
+  });
+  if (error) console.error("Could not record cache hit", error);
+}
+
+function usageLimitResponse(reason: string | null): Response {
+  const messages: Record<string, string> = {
+    pro_required: "This feature is included with Ownzith Pro.",
+    monthly_limit: "You have reached this month's usage limit.",
+    daily_limit: "You have reached today's usage limit. Try again tomorrow.",
+    rate_limit:
+      "Too many requests at once. Please wait a minute and try again.",
+  };
+  return jsonResponse(
+    {
+      error: messages[reason ?? ""] ??
+        "This request is not available right now.",
+      code: reason,
+    },
+    reason === "rate_limit" ? 429 : 402,
+  );
+}
+
+async function finalizeReservedUsage(
+  reservation: UsageReservation,
+  consume: boolean,
+  details: JsonMap,
+) {
+  const { error } = await reservation.adminClient.rpc(
+    "finalize_feature_usage",
+    {
+      target_user_id: reservation.userId,
+      target_request_id: reservation.requestId,
+      consume,
+      details: {
+        ...details,
+        duration_ms: Date.now() - reservation.startedAt,
+      },
+    },
+  );
+  if (error) console.error("Could not finalize feature usage", error);
+}
+
+function collectOpenAiUsage(rawResult: unknown): {
+  model: string | null;
+  fallbackUsed: boolean;
+  inputTokens: number;
+  outputTokens: number;
+} {
+  const raw = asRecord(rawResult) ?? {};
+  const primary = asRecord(raw.primary);
+  const verification = asRecord(raw.verification);
+  const primaryUsage = asRecord(primary?.usage);
+  const verificationUsage = asRecord(verification?.usage);
+  return {
+    model: cleanString(raw.fallback_model) ?? cleanString(raw.primary_model),
+    fallbackUsed: verification != null,
+    inputTokens: (asNumber(primaryUsage?.input_tokens) ?? 0) +
+      (asNumber(verificationUsage?.input_tokens) ?? 0),
+    outputTokens: (asNumber(primaryUsage?.output_tokens) ?? 0) +
+      (asNumber(verificationUsage?.output_tokens) ?? 0),
+  };
+}
 
 async function fetchCache({
   adminClient,
@@ -480,7 +758,10 @@ async function fetchCache({
     return null;
   }
 
-  return data as CacheRow;
+  const cached = data as CacheRow;
+  // Comic Vine was removed from the AI flow. Ignore its old cache entries so
+  // a prior enrichment cannot continue to override the current AI result.
+  return cached.provider_stage === "comicvine" ? null : cached;
 }
 
 async function fetchSharedBarcodeCache({
@@ -502,7 +783,8 @@ async function fetchSharedBarcodeCache({
     return null;
   }
 
-  return data as CacheRow;
+  const cached = data as CacheRow;
+  return cached.provider_stage === "comicvine" ? null : cached;
 }
 
 function cacheHit(cached: CacheRow): JsonMap {
@@ -596,6 +878,30 @@ async function saveSharedBarcodeCache({
   });
 }
 
+async function markIdentificationCacheMetronRefresh({
+  adminClient,
+  userId,
+  lookupType,
+  lookupKey,
+  cached,
+}: {
+  adminClient: UntypedSupabaseClient;
+  userId: string;
+  lookupType: LookupMode;
+  lookupKey: string;
+  cached: CacheRow;
+}) {
+  const { error } = await adminClient
+    .from("identification_cache")
+    .update({ raw_result: markMetronNotFoundRefresh(cached).raw_result })
+    .eq("user_id", userId)
+    .eq("lookup_type", lookupType)
+    .eq("lookup_key", lookupKey);
+  if (error) {
+    console.error("Could not mark the legacy barcode cache refresh", error);
+  }
+}
+
 async function saveSharedBarcodeCacheRow({
   adminClient,
   barcode,
@@ -622,7 +928,10 @@ async function saveSharedBarcodeCacheRow({
   }
 }
 
-async function lookupUpcItemDb(barcode: string): Promise<ProviderMatch | null> {
+async function lookupUpcItemDb(
+  barcode: string,
+  { throwOnUnavailable = false }: { throwOnUnavailable?: boolean } = {},
+): Promise<ProviderMatch | null> {
   const response = await fetch(`${upcItemDbEndpoint}?upc=${barcode}`, {
     headers: { Accept: "application/json" },
   });
@@ -632,6 +941,9 @@ async function lookupUpcItemDb(barcode: string): Promise<ProviderMatch | null> {
     return null;
   }
   if (response.status === 429 || response.status >= 500) {
+    if (throwOnUnavailable) {
+      throw new Error("The barcode catalog is temporarily unavailable.");
+    }
     return null;
   }
   if (response.status >= 400) {
@@ -681,6 +993,584 @@ async function lookupUpcItemDb(barcode: string): Promise<ProviderMatch | null> {
     providerStage: "upcitemdb",
     result,
     rawResult: payload,
+  };
+}
+
+async function lookupBarcodeCatalog(
+  barcode: string,
+): Promise<ProviderMatch | null> {
+  for (const lookupCode of barcodeLookupCodes(barcode)) {
+    // Metron only returns comic issues, so a miss must quietly continue to the
+    // broad catalog providers. That keeps ordinary barcode scans unchanged.
+    const match = await lookupMetronIssueByUpc(lookupCode) ??
+      await lookupUpcItemDb(lookupCode, {
+        throwOnUnavailable: true,
+      }) ?? await lookupGoUpc(lookupCode, {
+        throwOnUnavailable: true,
+      });
+    if (!match) {
+      continue;
+    }
+
+    return lookupCode == barcode
+      ? match
+      : requireSupplementConfirmation(match, barcode);
+  }
+
+  return null;
+}
+
+async function lookupMetronIssueByUpc(
+  barcode: string,
+): Promise<ProviderMatch | null> {
+  const apiToken = Deno.env.get("METRON_API_TOKEN")?.trim();
+  if (!apiToken) {
+    return null;
+  }
+
+  for (const exactCode of metronExactBarcodeCandidates(barcode)) {
+    const payload = await fetchMetronIssuePayload({
+      apiToken,
+      filterName: "upc",
+      filterValue: exactCode,
+    });
+    if (payload) {
+      const issue = pickMetronIssue(payload, exactCode);
+      if (issue) {
+        const variantMatch = await resolveMetronVariantMatch({
+          apiToken,
+          issue,
+          searchPayload: payload,
+          barcode,
+        });
+        if (variantMatch) {
+          return variantMatch;
+        }
+        return metronIssueMatch({
+          issue,
+          payload,
+          barcode,
+          isPartial: false,
+        });
+      }
+    }
+  }
+
+  // Mobile cameras can decode only the main UPC-A/EAN-13 portion of a comic
+  // barcode and miss its two- or five-digit supplement. Metron provides this
+  // exact prefix filter for that situation. A prefix result is never treated
+  // as an exact cover match because several variants can share the base UPC.
+  const prefix = metronUpcPrefix(barcode);
+  if (!prefix) {
+    return null;
+  }
+  const payload = await fetchMetronIssuePayload({
+    apiToken,
+    filterName: "upc_starts_with",
+    filterValue: prefix,
+  });
+  if (!payload) {
+    return null;
+  }
+
+  const issues = metronIssueRecords(payload);
+  if (!issues.length) {
+    return null;
+  }
+
+  // Variant UPCs are deliberately not indexed by Metron's issue list
+  // filters. A full comic barcode therefore needs to check the detail
+  // records of the relevant prefix candidates, not just the first list row.
+  if (metronFullVariantBarcode(barcode)) {
+    for (const issue of issues.slice(0, metronVariantCandidateLimit)) {
+      const variantMatch = await resolveMetronVariantMatch({
+        apiToken,
+        issue,
+        searchPayload: payload,
+        barcode,
+      });
+      if (variantMatch) {
+        return variantMatch;
+      }
+    }
+  }
+
+  return metronIssueMatch({
+    issue: issues[0],
+    payload,
+    barcode,
+    isPartial: true,
+  });
+}
+
+async function fetchMetronIssuePayload({
+  apiToken,
+  filterName,
+  filterValue,
+}: {
+  apiToken: string;
+  filterName: "upc" | "upc_starts_with";
+  filterValue: string;
+}): Promise<JsonMap | null> {
+  const url = new URL(metronIssueEndpoint);
+  url.searchParams.set(filterName, filterValue);
+  return await fetchMetronPayload(url, apiToken);
+}
+
+async function fetchMetronIssueDetail({
+  apiToken,
+  issue,
+}: {
+  apiToken: string;
+  issue: JsonMap;
+}): Promise<JsonMap | null> {
+  const issueId = metronIssueId(issue);
+  if (!issueId) {
+    return null;
+  }
+  return await fetchMetronPayload(
+    new URL(`${metronIssueEndpoint}${issueId}/`),
+    apiToken,
+  );
+}
+
+async function fetchMetronPayload(
+  url: URL,
+  apiToken: string,
+): Promise<JsonMap | null> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${apiToken}`,
+      },
+    });
+  } catch {
+    // Metron is optional. A network problem must not prevent the established
+    // broad catalog providers from handling the scan.
+    return null;
+  }
+
+  if (response.status >= 400) {
+    return null;
+  }
+  return await safeJson(response);
+}
+
+async function resolveMetronVariantMatch({
+  apiToken,
+  issue,
+  searchPayload,
+  barcode,
+}: {
+  apiToken: string;
+  issue: JsonMap;
+  searchPayload: JsonMap;
+  barcode: string;
+}): Promise<ProviderMatch | null> {
+  const variantBarcode = metronFullVariantBarcode(barcode);
+  if (!variantBarcode) {
+    return null;
+  }
+
+  // Variants are returned by Metron's issue-detail endpoint, but are not
+  // indexed by the issue UPC filters. Fetch one detail record only after a
+  // comic issue candidate is found, then compare the full scanned barcode.
+  const detail = await fetchMetronIssueDetail({ apiToken, issue });
+  if (!detail) {
+    return null;
+  }
+  const variant = pickMetronVariant(detail, variantBarcode);
+  if (!variant) {
+    return null;
+  }
+
+  return metronIssueMatch({
+    issue: detail,
+    payload: { search: searchPayload, detail },
+    barcode,
+    isPartial: false,
+    variant,
+  });
+}
+
+function metronIssueId(issue: JsonMap): string | null {
+  const id = issue["id"];
+  const value = typeof id === "number" ? String(id) : cleanString(id);
+  return value && /^[1-9]\d*$/.test(value) ? value : null;
+}
+
+function metronFullVariantBarcode(barcode: string): string | null {
+  const canonical = metronExactBarcodeCandidates(barcode)[0] ?? barcode;
+  return canonical.length === 17 ? canonical : null;
+}
+
+// Direct-market comics commonly encode the issue, cover/variant, and printing
+// in the five digits after the base UPC. This is publisher-defined GS1 data,
+// so it is used only as a safeguard: a numeric disagreement prevents an
+// automatic exact match, but an unrecognised format remains usable.
+function decodeComicBarcodeSupplement(
+  barcode: string,
+): ComicBarcodeSupplement | null {
+  const canonical = metronFullVariantBarcode(barcode);
+  if (!canonical) {
+    return null;
+  }
+
+  const supplement = canonical.slice(-5);
+  if (!/^\d{5}$/.test(supplement)) {
+    return null;
+  }
+
+  return {
+    barcode: canonical,
+    issueNumber: Number(supplement.slice(0, 3)),
+    variantNumber: Number(supplement.slice(3, 4)),
+    printingNumber: Number(supplement.slice(4, 5)),
+  };
+}
+
+function metronSupplementConflict({
+  barcode,
+  issueNumber,
+}: {
+  barcode: string;
+  issueNumber: string | null;
+}): JsonMap | null {
+  const decoded = decodeComicBarcodeSupplement(barcode);
+  if (!decoded || !issueNumber || !/^\d+$/.test(issueNumber)) {
+    return null;
+  }
+
+  const metronIssueNumber = Number(issueNumber);
+  if (
+    !Number.isSafeInteger(metronIssueNumber) ||
+    metronIssueNumber === decoded.issueNumber
+  ) {
+    return null;
+  }
+
+  return {
+    reason: "comic_barcode_issue_mismatch",
+    barcode: decoded.barcode,
+    expected_issue_number: String(decoded.issueNumber),
+    expected_variant_number: String(decoded.variantNumber),
+    expected_printing_number: String(decoded.printingNumber),
+    metron_issue_number: issueNumber,
+  };
+}
+
+function metronExactBarcodeCandidates(barcode: string): string[] {
+  if (barcode.length === 18 && barcode.startsWith("0")) {
+    // Vision can represent a UPC-A + supplement as an EAN-13 composite.
+    // Metron stores the UPC-A representation, without the leading EAN zero.
+    return [barcode.slice(1)];
+  }
+  return [barcode];
+}
+
+function metronUpcPrefix(barcode: string): string | null {
+  if (barcode.length === 12) {
+    return barcode;
+  }
+  if (barcode.length === 13 && barcode.startsWith("0")) {
+    return barcode.slice(1);
+  }
+  if (barcode.length === 17) {
+    return barcode.slice(0, 12);
+  }
+  if (barcode.length === 18 && barcode.startsWith("0")) {
+    return barcode.slice(1, 13);
+  }
+  return null;
+}
+
+function metronIssueRecords(payload: JsonMap): JsonMap[] {
+  return asArray(payload["results"] ?? payload["issues"] ?? payload)
+    .map((issue) => asRecord(issue))
+    .filter((issue): issue is JsonMap => Boolean(issue));
+}
+
+function metronIssueMatch({
+  issue,
+  payload,
+  barcode,
+  isPartial,
+  variant = null,
+}: {
+  issue: JsonMap;
+  payload: JsonMap;
+  barcode: string;
+  isPartial: boolean;
+  variant?: JsonMap | null;
+}): ProviderMatch | null {
+  const series = asRecord(issue["series"]);
+  const publisher = asRecord(issue["publisher"]);
+  const seriesName = cleanString(series?.["name"]);
+  const publisherName = cleanString(publisher?.["name"]);
+  const issueNumber = cleanString(issue["number"]);
+  const issueName = cleanString(issue["issue_name"]);
+  const collectionTitle = cleanString(issue["collection_title"]);
+  const supplementConflict = isPartial
+    ? null
+    : metronSupplementConflict({ barcode, issueNumber });
+  const needsConfirmation = isPartial || supplementConflict !== null;
+  const issueTitle = metronIssueTitle({
+    seriesName,
+    issueNumber,
+    issueName,
+    collectionTitle,
+  });
+  const variantName = cleanString(variant?.["name"]);
+  const title = needsConfirmation
+    ? seriesName ?? collectionTitle ?? issueTitle
+    : metronVariantTitle(issueTitle, variantName);
+  if (!title) {
+    return null;
+  }
+
+  const result = normalizeResult({
+    status: needsConfirmation ? "partial" : "matched",
+    providerStage: "metron",
+    title,
+    suggestedCategory: "Comics",
+    imageUrl: needsConfirmation
+      ? null
+      : metronImageUrl(variant) ?? metronImageUrl(issue),
+    description: needsConfirmation ? null : metronDescription(issue),
+    brand: publisherName,
+    franchise: inferFranchise(title, publisherName),
+    series: seriesName,
+    characterOrSubject: needsConfirmation
+      ? inferCharacterOrSubject(title)
+      : metronCharacterNames(issue) ?? inferCharacterOrSubject(title),
+    releaseYear: needsConfirmation ? null : inferYear(
+      cleanString(issue["store_date"]) ?? cleanString(issue["cover_date"]),
+    ),
+    barcode,
+    confidence: needsConfirmation ? 0.65 : 0.98,
+    sourceBadge: supplementConflict
+      ? "Metron catalog conflict • cover needs confirmation"
+      : isPartial
+      ? "Metron comic series match • cover needs confirmation"
+      : variant
+      ? "Metron comic variant match"
+      : "Metron comic match",
+    comicContext: {
+      issue_number: needsConfirmation ? null : issueNumber,
+      volume_name: seriesName,
+      publisher: publisherName,
+    },
+  });
+
+  return {
+    status: needsConfirmation ? "partial" : "matched",
+    providerStage: "metron",
+    result,
+    rawResult: supplementConflict
+      ? { ...payload, metron_supplement_conflict: supplementConflict }
+      : payload,
+  };
+}
+
+function barcodeCacheTtlDays(match: ProviderMatch): number {
+  const rawResult = asRecord(match.rawResult);
+  if (
+    match.providerStage === "metron" &&
+    asRecord(rawResult?.["metron_supplement_conflict"])
+  ) {
+    return metronSupplementConflictCacheTtlDays;
+  }
+  return identificationCacheTtlDays("barcode", match.status);
+}
+
+async function refreshCachedComicWithMetron(
+  cached: CacheRow,
+  barcode: string,
+): Promise<ProviderMatch | null> {
+  if (shouldRefreshCachedNotFoundWithMetron(cached)) {
+    return await lookupMetronIssueByUpc(barcode);
+  }
+  if (!isComicBarcodeCache(cached)) {
+    return null;
+  }
+  return await lookupMetronIssueByUpc(barcode);
+}
+
+function shouldRefreshCachedNotFoundWithMetron(cached: CacheRow): boolean {
+  if (cached.status !== "not_found" || cached.provider_stage === "metron") {
+    return false;
+  }
+  const rawResult = asRecord(cached.raw_result);
+  return asString(rawResult?.["metron_cache_refresh"]) !==
+    metronNotFoundCacheRefreshVersion;
+}
+
+function markMetronNotFoundRefresh(cached: CacheRow): CacheRow {
+  const rawResult = asRecord(cached.raw_result);
+  return {
+    ...cached,
+    raw_result: {
+      ...(rawResult ?? { upstream: cached.raw_result }),
+      metron_cache_refresh: metronNotFoundCacheRefreshVersion,
+    },
+  };
+}
+
+function isComicBarcodeCache(cached: CacheRow): boolean {
+  if (cached.provider_stage === "metron" || cached.status !== "matched") {
+    return false;
+  }
+
+  const result = cached.normalized_result ?? {};
+  if (normalizeSuggestedCategory(result["suggested_category"]) === "Comics") {
+    return true;
+  }
+
+  const title = asString(result["title"]) ?? "";
+  const brand = asString(result["brand"]) ?? "";
+  const description = asString(result["description"]) ?? "";
+  const text = `${title} ${brand} ${description}`;
+  return /\b(comic|comics|graphic novel|idw|marvel|dc)\b/i.test(text) ||
+    (/\bcover\b/i.test(text) && /#\s*\d+/i.test(text));
+}
+
+function rebuildCachedMetronPartial(
+  cached: CacheRow,
+  barcode: string,
+): ProviderMatch | null {
+  if (cached.provider_stage !== "metron" || cached.status !== "partial") {
+    return null;
+  }
+  const comicContext = asRecord(cached.normalized_result?.["comic_context"]);
+  const alreadySeriesOnly = !cleanString(comicContext?.["issue_number"]) &&
+    !cleanString(cached.normalized_result?.["image_url"]);
+  if (alreadySeriesOnly) {
+    return null;
+  }
+
+  const payload = asRecord(cached.raw_result);
+  if (!payload) {
+    return null;
+  }
+  const prefix = metronUpcPrefix(barcode) ?? barcode;
+  const issue = pickMetronIssue(payload, prefix);
+  return issue
+    ? metronIssueMatch({ issue, payload, barcode, isPartial: true })
+    : null;
+}
+
+function pickMetronIssue(payload: JsonMap, barcode: string): JsonMap | null {
+  const records = metronIssueRecords(payload);
+  if (!records.length) {
+    return null;
+  }
+
+  return records.find((issue) =>
+    normalizeBarcode(cleanString(issue["upc"])) === barcode
+  ) ?? records[0];
+}
+
+function pickMetronVariant(
+  issue: JsonMap,
+  barcode: string,
+): JsonMap | null {
+  const variants = asArray(issue["variants"])
+    .map((variant) => asRecord(variant))
+    .filter((variant): variant is JsonMap => Boolean(variant));
+  return variants.find((variant) =>
+    normalizeBarcode(cleanString(variant["upc"])) === barcode
+  ) ?? null;
+}
+
+function metronIssueTitle({
+  seriesName,
+  issueNumber,
+  issueName,
+  collectionTitle,
+}: {
+  seriesName: string | null;
+  issueNumber: string | null;
+  issueName: string | null;
+  collectionTitle: string | null;
+}): string | null {
+  const numberedSeries = seriesName
+    ? `${seriesName}${issueNumber ? ` #${issueNumber}` : ""}`
+    : null;
+  if (!numberedSeries) {
+    return collectionTitle ?? issueName;
+  }
+  if (
+    !issueName ||
+    normalizeText(numberedSeries).includes(normalizeText(issueName))
+  ) {
+    return numberedSeries;
+  }
+  return `${numberedSeries}: ${issueName}`;
+}
+
+function metronVariantTitle(
+  issueTitle: string | null,
+  variantName: string | null,
+): string | null {
+  if (!issueTitle) {
+    return variantName;
+  }
+  if (
+    !variantName ||
+    normalizeText(issueTitle).includes(normalizeText(variantName))
+  ) {
+    return issueTitle;
+  }
+  return `${issueTitle} — ${variantName}`;
+}
+
+function metronImageUrl(issue: JsonMap | null): string | null {
+  if (!issue) {
+    return null;
+  }
+  const image = issue["image"] ?? issue["image_url"];
+  return cleanString(image) ?? cleanString(asRecord(image)?.["url"]);
+}
+
+function metronDescription(issue: JsonMap): string | null {
+  const description = cleanString(issue["desc"]) ??
+    cleanString(issue["description"]);
+  return description?.replaceAll(/<[^>]*>/g, " ").replaceAll(/\s+/g, " ")
+    .trim() || null;
+}
+
+function metronCharacterNames(issue: JsonMap): string | null {
+  const names = asArray(issue["characters"])
+    .map((character) => cleanString(asRecord(character)?.["name"]))
+    .filter((name): name is string => Boolean(name));
+  return names.length ? names.join(", ") : null;
+}
+
+function barcodeLookupCodes(barcode: string): string[] {
+  const baseCode = barcode.length == 17
+    ? barcode.slice(0, 12)
+    : barcode.length == 18
+    ? barcode.slice(0, 13)
+    : null;
+  return baseCode ? [barcode, baseCode] : [barcode];
+}
+
+function requireSupplementConfirmation(
+  match: ProviderMatch,
+  scannedBarcode: string,
+): ProviderMatch {
+  return {
+    ...match,
+    status: "partial",
+    result: {
+      ...match.result,
+      status: "partial",
+      barcode: scannedBarcode,
+      confidence: Math.min(match.result.confidence ?? 0.65, 0.65),
+      source_badge: "Catalog series match • cover needs confirmation",
+    },
   };
 }
 
@@ -755,7 +1645,10 @@ async function searchUpcItemDbByText(
   };
 }
 
-async function lookupGoUpc(barcode: string): Promise<ProviderMatch | null> {
+async function lookupGoUpc(
+  barcode: string,
+  { throwOnUnavailable = false }: { throwOnUnavailable?: boolean } = {},
+): Promise<ProviderMatch | null> {
   const apiKey = Deno.env.get("GOUPC_API_KEY");
   if (!apiKey) {
     return null;
@@ -767,9 +1660,13 @@ async function lookupGoUpc(barcode: string): Promise<ProviderMatch | null> {
       Authorization: `Bearer ${apiKey}`,
     },
   });
-  if (
-    response.status === 404 || response.status === 429 || response.status >= 500
-  ) {
+  if (response.status === 404) {
+    return null;
+  }
+  if (response.status === 429 || response.status >= 500) {
+    if (throwOnUnavailable) {
+      throw new Error("The barcode catalog is temporarily unavailable.");
+    }
     return null;
   }
   if (response.status >= 400) {
@@ -889,7 +1786,6 @@ async function identifyPhotoWithOpenAi({
       primary: primary.payload,
       verification: verification?.payload ?? null,
     },
-    isComicLike: selected.isComicLike,
     detectedBarcode: barcode ?? selected.detectedBarcode,
     isConfidentMatch,
   };
@@ -1045,8 +1941,6 @@ async function requestOpenAiPhotoAssessment({
     }),
     payload,
     parsed,
-    isComicLike: Boolean(parsed.is_comic_like) ||
-      normalizeSuggestedCategory(parsed.suggested_category) == "Comics",
     detectedBarcode: resolvedBarcode,
     visibleText,
     identifyingMarkers,
@@ -1068,7 +1962,8 @@ async function enrichPhotoWithBarcodeCatalog({
     return null;
   }
 
-  const providerMatch = await lookupUpcItemDb(barcode) ??
+  const providerMatch = await lookupMetronIssueByUpc(barcode) ??
+    await lookupUpcItemDb(barcode) ??
     await lookupGoUpc(barcode);
   if (!providerMatch) {
     return null;
@@ -1098,7 +1993,9 @@ async function enrichPhotoWithBarcodeCatalog({
       baseResult.confidence ?? 0.6,
       providerResult.confidence ?? 0,
     ),
-    sourceBadge: providerMatch.providerStage === "goupc"
+    sourceBadge: providerMatch.providerStage === "metron"
+      ? "AI + Metron comic match"
+      : providerMatch.providerStage === "goupc"
       ? "AI + GO-UPC image"
       : "AI + Catalog image",
     comicContext: baseResult.comic_context ?? providerResult.comic_context,
@@ -1168,180 +2065,6 @@ async function enrichPhotoWithUpcItemDbSearch({
       upcitemdb_search: providerMatch.rawResult,
     },
   };
-}
-
-async function enrichComicProviders(
-  baseResult: NormalizedIdentificationResult,
-): Promise<ProviderMatch | null> {
-  const enrichers = [enrichWithComicVine];
-  for (const enrich of enrichers) {
-    const result = await enrich(baseResult);
-    if (result) {
-      return result;
-    }
-  }
-  return null;
-}
-
-async function enrichWithComicVine(
-  baseResult: NormalizedIdentificationResult,
-): Promise<ProviderMatch | null> {
-  const apiKey = Deno.env.get("COMICVINE_API");
-  if (!apiKey) {
-    return null;
-  }
-
-  const query = [
-    baseResult.title,
-    baseResult.series,
-    baseResult.franchise,
-    baseResult.comic_context?.issue_number,
-    baseResult.comic_context?.volume_name,
-    baseResult.comic_context?.publisher,
-  ]
-    .filter((value): value is string => Boolean(value && value.trim()))
-    .join(" ");
-  if (!query.trim()) {
-    return null;
-  }
-
-  const url = new URL(comicVineSearchEndpoint);
-  url.searchParams.set("api_key", apiKey);
-  url.searchParams.set("format", "json");
-  url.searchParams.set("resources", "issue,volume");
-  url.searchParams.set("limit", "5");
-  url.searchParams.set("query", query);
-
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": "collectorapp/1.0",
-    },
-  });
-  if (response.status >= 400) {
-    return null;
-  }
-
-  const payload = await safeJson(response);
-  const results = asArray(payload?.results);
-  if (!results.length) {
-    return null;
-  }
-
-  const match = pickBestComicVineMatch(results, baseResult);
-  if (!match) {
-    return null;
-  }
-
-  const issueNumber = cleanString(match["issue_number"]);
-  const volume = asRecord(match["volume"]);
-  const publisher = asRecord(match["publisher"]) ||
-    asRecord(volume ? volume["publisher"] : null);
-  const image = asRecord(match["image"]);
-  const imageUrl = cleanString(image ? image["super_url"] : null) ??
-    cleanString(image ? image["original_url"] : null);
-  const volumeName = cleanString(volume ? volume["name"] : null) ??
-    cleanString(match["name"]);
-
-  const result = normalizeResult({
-    status: "enriched",
-    providerStage: "comicvine",
-    title: cleanString(match["name"]) ?? baseResult.title,
-    suggestedCategory: "Comics",
-    imageUrl: imageUrl ?? baseResult.image_url,
-    description: cleanString(match["deck"]) ??
-      cleanString(match["description"]) ??
-      baseResult.description,
-    brand: baseResult.brand,
-    franchise: baseResult.franchise ?? volumeName,
-    series: volumeName ?? baseResult.series,
-    characterOrSubject: baseResult.character_or_subject,
-    releaseYear: inferYear(cleanString(match["cover_date"])) ??
-      inferYear(cleanString(match["start_year"])) ??
-      baseResult.release_year,
-    barcode: baseResult.barcode,
-    confidence: Math.max(baseResult.confidence ?? 0.65, 0.9),
-    sourceBadge: "AI + Comic Vine",
-    comicContext: {
-      issue_number: issueNumber,
-      volume_name: volumeName,
-      publisher: cleanString(publisher ? publisher["name"] : null) ??
-        baseResult.comic_context?.publisher ??
-        null,
-    },
-  });
-
-  return {
-    status: "enriched",
-    providerStage: "comicvine",
-    result,
-    rawResult: payload,
-  };
-}
-
-function pickBestComicVineMatch(
-  candidates: unknown[],
-  baseResult: NormalizedIdentificationResult,
-): JsonMap | null {
-  const wanted = normalizeText(baseResult.title || baseResult.series || "");
-  const wantedSeries = normalizeText(
-    baseResult.comic_context?.volume_name ?? baseResult.series ?? "",
-  );
-  const wantedIssue = normalizeText(
-    baseResult.comic_context?.issue_number ?? "",
-  );
-  const wantedPublisher = normalizeText(
-    baseResult.comic_context?.publisher ?? "",
-  );
-  let bestScore = -1;
-  let best: JsonMap | null = null;
-
-  for (const candidate of candidates) {
-    const row = asRecord(candidate);
-    if (!row) {
-      continue;
-    }
-    const name = normalizeText(cleanString(row["name"]) ?? "");
-    const deck = normalizeText(cleanString(row["deck"]) ?? "");
-    const issueNumber = normalizeText(cleanString(row["issue_number"]) ?? "");
-    const volume = asRecord(row["volume"]);
-    const volumeName = normalizeText(
-      cleanString(volume ? volume["name"] : null) ?? "",
-    );
-    const publisher = asRecord(row["publisher"]) ||
-      asRecord(volume ? volume["publisher"] : null);
-    const publisherName = normalizeText(
-      cleanString(publisher ? publisher["name"] : null) ?? "",
-    );
-    let score = 0;
-    if (wanted && name === wanted) {
-      score += 10;
-    } else if (wanted && name.includes(wanted)) {
-      score += 7;
-    } else if (wanted && deck.includes(wanted)) {
-      score += 4;
-    }
-    if (wantedSeries && volumeName === wantedSeries) {
-      score += 6;
-    } else if (wantedSeries && volumeName.includes(wantedSeries)) {
-      score += 4;
-    }
-    if (wantedIssue && issueNumber === wantedIssue) {
-      score += 6;
-    }
-    if (wantedPublisher && publisherName === wantedPublisher) {
-      score += 3;
-    }
-    if (cleanString(row["resource_type"]) === "issue") {
-      score += 2;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      best = row;
-    }
-  }
-
-  return bestScore <= 0 ? null : best;
 }
 
 function normalizeResult({
@@ -1521,61 +2244,6 @@ function shouldTryUpcItemDbTextSearch(
   }
 
   return (baseResult.confidence ?? 0) >= 0.45;
-}
-
-function shouldTryComicEnrichment(
-  baseResult: NormalizedIdentificationResult,
-): boolean {
-  if (looksLikeComicArtMerchandise(baseResult)) {
-    return false;
-  }
-
-  return true;
-}
-
-function looksLikeComicArtMerchandise(
-  baseResult: NormalizedIdentificationResult,
-): boolean {
-  const title = normalizeText(baseResult.title);
-  const brand = normalizeText(baseResult.brand ?? "");
-  const franchise = normalizeText(baseResult.franchise ?? "");
-  const description = normalizeText(baseResult.description ?? "");
-  const combined = [title, brand, franchise, description]
-    .filter((value) => value.length > 0)
-    .join(" ");
-
-  if (!combined) {
-    return false;
-  }
-
-  const merchSignals = [
-    "funko",
-    "pop",
-    "comic covers",
-    "comic cover",
-    "deluxe",
-    "vinyl",
-    "vinyl figure",
-    "figure",
-    "targetcon",
-    "exclusive",
-    "collector corps",
-    "collectible",
-    "boxed",
-    "window box",
-  ];
-
-  const category = normalizeSuggestedCategory(baseResult.suggested_category);
-  const hasMerchSignals = merchSignals.some((signal) =>
-    combined.includes(signal)
-  );
-  const productCategory = category == "Action Figures" ||
-    category == "Vinyl Figures" ||
-    category == "Statues" ||
-    category == "Memorabilia" ||
-    category == "Other";
-
-  return hasMerchSignals || productCategory;
 }
 
 function buildUpcItemDbSearchQuery(

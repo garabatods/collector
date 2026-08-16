@@ -9,6 +9,13 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  # The scanner package is vendored so its iOS barcode-supplement fix is
+  # reproducible. Analyze the app against its public API, not the package's
+  # own example-only development configuration.
+  exclude:
+    - packages/mobile_scanner/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

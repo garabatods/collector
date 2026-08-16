@@ -291,23 +291,6 @@ class _CollectibleDetailBody extends StatelessWidget {
           ),
           sliver: SliverList(
             delegate: SliverChildListDelegate([
-              if (collectible.tags.isNotEmpty) ...[
-                _DetailSection(
-                  title: 'Tags',
-                  child: Wrap(
-                    spacing: AppSpacing.sm,
-                    runSpacing: AppSpacing.sm,
-                    children: [
-                      for (final tag in collectible.tags)
-                        CollectorChip(
-                          label: tag.name,
-                          tone: CollectorChipTone.primary,
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: _detailSectionSpacing),
-              ],
               _DetailSection(
                 title: 'Collector Snapshot',
                 child: Column(
@@ -753,81 +736,38 @@ class _DetailHero extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: AppSpacing.md),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              if (isComic) {
-                return Row(
-                  children: [
-                    SizedBox(
-                      width: 88,
-                      child: _HeroMetricCard(
-                        label: 'Issue',
-                        value:
-                            _normalizedText(collectible.itemNumber) ??
-                            'Unknown',
-                        accentColor: accentColor,
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: _HeroMetricCard(
-                        label: 'Publisher',
-                        value: _normalizedText(collectible.brand) ?? 'Unknown',
-                        accentColor: secondaryAccent,
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    SizedBox(
-                      width: 88,
-                      child: _HeroMetricCard(
-                        label: 'Year',
-                        value: collectible.releaseYear?.toString() ?? 'Unknown',
-                        accentColor: AppColors.primary,
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              return Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: _HeroMetricCard(
-                      label: 'Condition',
-                      value:
-                          _collectorStatusText(collectible.itemCondition) ??
-                          'Unrated',
-                      accentColor: accentColor,
-                    ),
+          if (isComic) ...[
+            const SizedBox(height: AppSpacing.md),
+            Row(
+              children: [
+                SizedBox(
+                  width: 88,
+                  child: _HeroMetricCard(
+                    label: 'Issue',
+                    value: _normalizedText(collectible.itemNumber) ?? 'Unknown',
+                    accentColor: accentColor,
                   ),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    flex: 2,
-                    child: _HeroMetricCard(
-                      label: 'Box',
-                      value:
-                          _collectorStatusText(collectible.boxStatus) ??
-                          'Unknown',
-                      accentColor: secondaryAccent,
-                    ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: _HeroMetricCard(
+                    label: 'Publisher',
+                    value: _normalizedText(collectible.brand) ?? 'Unknown',
+                    accentColor: secondaryAccent,
                   ),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    flex: 3,
-                    child: _HeroMetricCard(
-                      label: 'Cost',
-                      value:
-                          _formatCurrency(collectible.purchasePrice) ??
-                          'Not tracked',
-                      accentColor: AppColors.primary,
-                    ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                SizedBox(
+                  width: 88,
+                  child: _HeroMetricCard(
+                    label: 'Year',
+                    value: collectible.releaseYear?.toString() ?? 'Unknown',
+                    accentColor: AppColors.primary,
                   ),
-                ],
-              );
-            },
-          ),
+                ),
+              ],
+            ),
+          ],
           if (collectible.purchasePrice != null ||
               collectible.estimatedValue != null) ...[
             const SizedBox(height: AppSpacing.sm),

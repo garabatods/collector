@@ -7,7 +7,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/collection/data/models/collectible_model.dart';
 import '../../features/collection/data/models/collectible_photo_model.dart';
 import '../../features/profile/data/models/profile_model.dart';
-import '../../features/wishlist/data/models/wishlist_item_model.dart';
 import 'archive_sync_coordinator.dart';
 import 'archive_types.dart';
 import 'local_archive_database.dart';
@@ -39,15 +38,13 @@ class ArchiveRepository {
 
   Stream<ArchiveHomeSummary> watchHomeSummary() {
     final userId = _requireUserId();
-    return Rx.combineLatest4(
+    return Rx.combineLatest3(
       _database.watchProfile(userId),
       _database.watchCollectibles(userId),
-      _database.watchWishlistItems(userId),
       _watchPrimaryPhotoRefs(userId),
       (
         ProfileModel? profile,
         List<CollectibleModel> collectibles,
-        List<WishlistItemModel> wishlistItems,
         Map<String, ArchivePhotoRef> photoRefs,
       ) {
         final recentItems = collectibles.take(6).toList(growable: false);
@@ -59,7 +56,6 @@ class ArchiveRepository {
           userId: userId,
           profile: profile,
           collectibles: collectibles,
-          wishlistCount: wishlistItems.length,
           recentItems: recentItems,
           favoriteItems: favoriteItems,
           photoRefsByCollectibleId: photoRefs,
@@ -185,15 +181,13 @@ class ArchiveRepository {
 
   Stream<ArchiveProfileSummary> watchProfileSummary() {
     final userId = _requireUserId();
-    return Rx.combineLatest4(
+    return Rx.combineLatest3(
       _database.watchProfile(userId),
       _database.watchCollectibles(userId),
-      _database.watchWishlistItems(userId),
       _watchPrimaryPhotoRefs(userId),
       (
         ProfileModel? profile,
         List<CollectibleModel> collectibles,
-        List<WishlistItemModel> wishlistItems,
         Map<String, ArchivePhotoRef> photoRefs,
       ) {
         final categoryCounts = <String, int>{};
@@ -248,7 +242,6 @@ class ArchiveRepository {
           photoCount: photoCount,
           topCategoryItemCount: topCategoryItemCount,
           topFranchiseItemCount: topFranchiseItemCount,
-          wishlistCount: wishlistItems.length,
           latestItem: latestItem,
           featuredItem: featuredItem,
           featuredPhotoRef: featuredItem?.id == null
@@ -258,13 +251,6 @@ class ArchiveRepository {
         );
       },
     );
-  }
-
-  Stream<ArchiveWishlistSummary> watchWishlistSummary() {
-    final userId = _requireUserId();
-    return _database
-        .watchWishlistItems(userId)
-        .map((items) => ArchiveWishlistSummary(items: items));
   }
 
   Stream<Map<String, ArchivePhotoRef>> _watchPrimaryPhotoRefs(String userId) {

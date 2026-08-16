@@ -968,6 +968,14 @@ class _ManualAddCollectibleScreenState
             ? CollectorSnackBarTone.warning
             : CollectorSnackBarTone.success,
       );
+    } on CollectibleLimitException {
+      if (!mounted) return;
+      CollectorSnackBar.show(
+        context,
+        message:
+            'Your archive limit has been reached. Delete an item or restore Pro before adding another.',
+        tone: CollectorSnackBarTone.warning,
+      );
     } catch (_) {
       if (!mounted) {
         return;

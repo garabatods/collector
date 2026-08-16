@@ -61,7 +61,7 @@ After the first successful sync, these experiences should remain usable offline:
 - Category views
 - Collectible detail reads
 - Profile summary
-- Wishlist
+- Account access summary from the last successful refresh
 - Cached primary photos
 
 If there is no local copy yet and the device is offline, show an explicit bootstrap/offline state instead of an empty screen.

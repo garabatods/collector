@@ -8,7 +8,6 @@ import '../../features/collection/data/models/collectible_model.dart';
 import '../../features/collection/data/models/collectible_photo_model.dart';
 import '../../features/collection/data/models/tag_model.dart';
 import '../../features/profile/data/models/profile_model.dart';
-import '../../features/wishlist/data/models/wishlist_item_model.dart';
 import 'archive_types.dart';
 import 'local_archive_database.dart';
 import 'photo_cache_store.dart';
@@ -173,8 +172,7 @@ class ArchiveSyncCoordinator {
       unawaited(
         _photoCacheStore.reconcilePrimaryPhotos(userId, snapshot.photos),
       );
-      final refreshedHasLocalData =
-          snapshot.collectibles.isNotEmpty || snapshot.wishlistItems.isNotEmpty;
+      final refreshedHasLocalData = snapshot.collectibles.isNotEmpty;
       if (_isCurrentSyncUser(userId)) {
         status.value = SyncStatus(
           hasLocalData: refreshedHasLocalData,
@@ -274,11 +272,6 @@ class ArchiveSyncCoordinator {
         .select()
         .eq('user_id', userId)
         .order('created_at', ascending: false);
-    final wishlistFuture = _client
-        .from('wishlist_items')
-        .select()
-        .eq('user_id', userId)
-        .order('created_at', ascending: false);
     final tagsFuture = _client
         .from('tags')
         .select()
@@ -288,7 +281,6 @@ class ArchiveSyncCoordinator {
     final results = await Future.wait([
       profileFuture,
       collectiblesFuture,
-      wishlistFuture,
       tagsFuture,
     ]);
 
@@ -301,13 +293,7 @@ class ArchiveSyncCoordinator {
               CollectibleModel.fromJson(Map<String, Object?>.from(row as Map)),
         )
         .toList(growable: false);
-    final wishlistItems = (results[2] as List)
-        .map(
-          (row) =>
-              WishlistItemModel.fromJson(Map<String, Object?>.from(row as Map)),
-        )
-        .toList(growable: false);
-    final tags = (results[3] as List)
+    final tags = (results[2] as List)
         .map((row) => TagModel.fromJson(Map<String, Object?>.from(row as Map)))
         .toList(growable: false);
 
@@ -353,7 +339,6 @@ class ArchiveSyncCoordinator {
       profile: profile,
       collectibles: collectibles,
       photos: photos,
-      wishlistItems: wishlistItems,
       tags: tags,
       tagLinks: tagLinks,
     );

@@ -5,6 +5,7 @@ import 'auth/auth_service.dart';
 import 'screens/authentication_screen.dart';
 import 'screens/home_dashboard_screen.dart';
 import 'screens/splash_screen.dart';
+import 'features/access/data/revenuecat_service.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -54,7 +55,10 @@ class _AppShellState extends State<AppShell> {
           case AuthStage.authenticated:
             return HomeDashboardScreen(
               isSupabaseConfigured: widget.isSupabaseConfigured,
-              onSignOut: _controller.signOut,
+              onSignOut: () async {
+                await RevenueCatService.logOut();
+                await _controller.signOut();
+              },
             );
         }
       },

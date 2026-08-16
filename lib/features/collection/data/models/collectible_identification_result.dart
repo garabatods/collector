@@ -24,15 +24,15 @@ enum CollectibleIdentificationProviderStage {
   cache,
   upcitemdb,
   goupc,
-  openai,
-  comicvine;
+  metron,
+  openai;
 
   static CollectibleIdentificationProviderStage fromWire(String? value) {
     return switch (value) {
       'cache' => CollectibleIdentificationProviderStage.cache,
       'goupc' => CollectibleIdentificationProviderStage.goupc,
+      'metron' => CollectibleIdentificationProviderStage.metron,
       'openai' => CollectibleIdentificationProviderStage.openai,
-      'comicvine' => CollectibleIdentificationProviderStage.comicvine,
       _ => CollectibleIdentificationProviderStage.upcitemdb,
     };
   }
@@ -119,8 +119,7 @@ class CollectibleIdentificationResult {
 
   bool get isComicLike =>
       (suggestedCategory ?? '').trim().toLowerCase() == 'comics' ||
-      comicContext != null ||
-      providerStage == CollectibleIdentificationProviderStage.comicvine;
+      comicContext != null;
 
   String? get publisherCandidate => comicContext?.publisher ?? brand;
 

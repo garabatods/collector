@@ -9,7 +9,8 @@
 - profiles
 - collectibles
 - collectible_photos
-- wishlist_items
+- user_entitlements
+- feature_usage_events
 
 ## Security direction
 - Enable Row Level Security on app tables
@@ -34,7 +35,7 @@ Start simple:
 - allow future support for multiple photos later
 
 ## Category note for database design
-For MVP, the `collectibles.category` field and `wishlist_items.category` field can be stored as plain text.
+For MVP, the `collectibles.category` field can be stored as plain text.
 
 Reason:
 - the UI will offer curated default categories

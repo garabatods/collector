@@ -6,6 +6,7 @@ import '../core/data/archive_types.dart';
 import '../features/collection/data/models/collectible_detail_navigation_context.dart';
 import '../features/collection/data/repositories/collectible_photos_repository.dart';
 import '../features/collection/data/repositories/collectibles_repository.dart';
+import '../features/gamification/presentation/collector_achievement_notifier.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/add_item_method_sheet.dart';
@@ -17,7 +18,7 @@ import '../widgets/collector_button.dart';
 import '../widgets/collector_panel.dart';
 import '../widgets/collector_snack_bar.dart';
 import '../widgets/collector_skeleton.dart';
-import '../widgets/collector_sticky_back_button.dart';
+import '../widgets/collector_text_field.dart';
 import 'ai_photo_identification_screen.dart';
 import 'manual_add_collectible_screen.dart';
 import 'scanner_flow_screen.dart';
@@ -43,6 +44,8 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
   final _collectiblesRepository = CollectiblesRepository();
   final _photosRepository = CollectiblePhotosRepository();
   final _scrollController = ScrollController();
+  final _searchController = TextEditingController();
+  final _searchFocusNode = FocusNode();
 
   var _didChangeCollection = false;
   var _favoritesOnly = false;
@@ -65,12 +68,14 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
     super.initState();
     _stream = _buildStream();
     _scrollController.addListener(_handleScroll);
+    _searchController.addListener(_handleQueryChanged);
   }
 
   @override
   void didUpdateWidget(covariant CategoryCollectionScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.category != widget.category) {
+      _searchController.clear();
       _resetVisibleItems();
       _stream = _buildStream();
     }
@@ -81,7 +86,22 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
     _scrollController
       ..removeListener(_handleScroll)
       ..dispose();
+    _searchFocusNode.dispose();
+    _searchController
+      ..removeListener(_handleQueryChanged)
+      ..dispose();
     super.dispose();
+  }
+
+  String get _query => _searchController.text.trim();
+
+  void _handleQueryChanged() {
+    setState(() {
+      _selectedCollectibleIds.clear();
+      _isDeletingSelection = false;
+      _resetVisibleItems();
+      _stream = _buildStream();
+    });
   }
 
   bool get _hasActiveRefinementState {
@@ -107,6 +127,7 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
   Stream<ArchiveLibraryPage> _buildStream() {
     return _archiveRepository.watchLibraryPage(
       filters: ArchiveLibraryFilters(
+        query: _query,
         category: widget.category,
         favoritesOnly: _favoritesOnly,
         grailsOnly: _grailsOnly,
@@ -159,6 +180,11 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
       _resetVisibleItems();
       _stream = _buildStream();
     });
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    _searchFocusNode.requestFocus();
   }
 
   Future<void> _openRefineSheet() async {
@@ -225,6 +251,11 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
     );
     if (created == true) {
       await _reload();
+      if (mounted) {
+        await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+          context,
+        );
+      }
     }
   }
 
@@ -347,6 +378,11 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
     );
     if (created == true) {
       await _reload();
+      if (mounted) {
+        await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+          context,
+        );
+      }
     }
   }
 
@@ -359,6 +395,11 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
     );
     if (created == true) {
       await _reload();
+      if (mounted) {
+        await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+          context,
+        );
+      }
     }
   }
 
@@ -396,6 +437,7 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
                       return _CategoryCollectionErrorState(
                         category: widget.category,
                         onRetry: _reload,
+                        onBack: _handleBack,
                       );
                     }
 
@@ -406,187 +448,205 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
                     _knownResultCount = data.totalCount;
                     _isExpandingVisibleItems = false;
 
-                    if (data.totalCount == 0 && !_hasActiveRefinementState) {
-                      return Stack(
-                        children: [
-                          _CategoryCollectionEmptyState(
-                            category: widget.category,
-                          ),
-                          if (!_isSelectionMode)
-                            _CategoryStickyAddButton(onTap: _openAddItemSheet),
-                        ],
-                      );
-                    }
-
                     final contentBottomPadding = _isSelectionMode
                         ? 196.0
                         : 104.0;
 
                     return Stack(
                       children: [
-                        CustomScrollView(
-                          controller: _scrollController,
-                          slivers: [
-                            SliverToBoxAdapter(
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  AppSpacing.md,
-                                  AppSpacing.md,
-                                  AppSpacing.md,
-                                  AppSpacing.lg,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const SizedBox(height: 48),
-                                    const SizedBox(height: AppSpacing.lg),
-                                    _CategoryPageTitle(
-                                      category: widget.category,
-                                    ),
-                                    const SizedBox(height: AppSpacing.lg),
-                                    _CategoryBrowseControls(
-                                      count: data.totalCount,
-                                      totalCount: data.totalCount,
-                                      viewMode: _viewMode,
-                                      refineHighlighted:
-                                          _hasActiveRefinementState,
-                                      onViewModeChanged: (viewMode) {
-                                        setState(() {
-                                          _viewMode = viewMode;
-                                        });
-                                      },
-                                      onRefineTap: _openRefineSheet,
-                                    ),
-                                    if (data.items.isEmpty) ...[
-                                      const SizedBox(height: AppSpacing.lg),
-                                      _EmptyFilterResultsPanel(
-                                        onClearFilters: _clearRefinements,
-                                      ),
-                                    ],
-                                  ],
-                                ),
+                        Column(
+                          children: [
+                            _CategoryFixedHeader(
+                              category: widget.category,
+                              searchController: _searchController,
+                              searchFocusNode: _searchFocusNode,
+                              onBack: _handleBack,
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                AppSpacing.md,
+                                0,
+                                AppSpacing.md,
+                                AppSpacing.lg,
+                              ),
+                              child: _CategoryBrowseControls(
+                                count: data.totalCount,
+                                totalCount: data.totalCount,
+                                viewMode: _viewMode,
+                                refineHighlighted: _hasActiveRefinementState,
+                                onViewModeChanged: (viewMode) {
+                                  setState(() {
+                                    _viewMode = viewMode;
+                                  });
+                                },
+                                onRefineTap: _openRefineSheet,
                               ),
                             ),
-                            if (data.items.isNotEmpty)
-                              if (_viewMode == _CategoryViewMode.grid)
-                                SliverPadding(
-                                  padding: EdgeInsets.fromLTRB(
-                                    AppSpacing.md,
-                                    0,
-                                    AppSpacing.md,
-                                    contentBottomPadding,
-                                  ),
-                                  sliver: SliverGrid(
-                                    delegate: SliverChildBuilderDelegate((
-                                      context,
-                                      index,
-                                    ) {
-                                      final collectible = data.items[index];
-                                      final id = collectible.id;
-                                      final photoRef = id == null
-                                          ? null
-                                          : data.photoRefsByCollectibleId[id];
-
-                                      return CollectibleGridCard(
-                                        collectible: collectible,
-                                        photoRef: photoRef,
-                                        onCollectionChanged: _reload,
-                                        detailNavigationContext:
-                                            CollectibleDetailNavigationContext.fromCollectibles(
-                                              source: CollectibleDetailSource
-                                                  .category,
-                                              collectibles: data.items,
-                                              currentCollectible: collectible,
-                                              categoryLabel: widget.category,
-                                            ),
-                                        selectionMode: _isSelectionMode,
-                                        selected:
-                                            id != null &&
-                                            _selectedCollectibleIds.contains(
-                                              id,
-                                            ),
-                                        onSelectionTap: id == null
-                                            ? null
-                                            : () => _toggleSelection(id),
-                                        onLongPressSelection: id == null
-                                            ? null
-                                            : () => _isSelectionMode
-                                                  ? _toggleSelection(id)
-                                                  : _enterSelectionMode(id),
-                                      );
-                                    }, childCount: data.items.length),
-                                    gridDelegate:
-                                        const SliverGridDelegateWithFixedCrossAxisCount(
-                                          crossAxisCount: 3,
-                                          crossAxisSpacing: AppSpacing.sm,
-                                          mainAxisSpacing: AppSpacing.md,
-                                          childAspectRatio: 0.72,
+                            Expanded(
+                              child: CustomScrollView(
+                                controller: _scrollController,
+                                slivers: [
+                                  if (data.items.isEmpty)
+                                    SliverFillRemaining(
+                                      hasScrollBody: false,
+                                      child: Padding(
+                                        padding: EdgeInsets.fromLTRB(
+                                          AppSpacing.md,
+                                          AppSpacing.lg,
+                                          AppSpacing.md,
+                                          contentBottomPadding,
                                         ),
-                                  ),
-                                )
-                              else
-                                SliverPadding(
-                                  padding: EdgeInsets.fromLTRB(
-                                    AppSpacing.md,
-                                    0,
-                                    AppSpacing.md,
-                                    contentBottomPadding,
-                                  ),
-                                  sliver: SliverList.separated(
-                                    itemCount: data.items.length,
-                                    separatorBuilder: (_, _) =>
-                                        const SizedBox(height: AppSpacing.xs),
-                                    itemBuilder: (context, index) {
-                                      final collectible = data.items[index];
-                                      final id = collectible.id;
-                                      final photoRef = id == null
-                                          ? null
-                                          : data.photoRefsByCollectibleId[id];
+                                        child: _query.isNotEmpty
+                                            ? _EmptySearchResultsPanel(
+                                                category: widget.category,
+                                                query: _query,
+                                                onClearSearch: _clearSearch,
+                                              )
+                                            : _hasActiveRefinementState
+                                            ? _EmptyFilterResultsPanel(
+                                                onClearFilters:
+                                                    _clearRefinements,
+                                              )
+                                            : _CategoryCollectionEmptyState(
+                                                category: widget.category,
+                                              ),
+                                      ),
+                                    ),
+                                  if (data.items.isNotEmpty)
+                                    if (_viewMode == _CategoryViewMode.grid)
+                                      SliverPadding(
+                                        padding: EdgeInsets.fromLTRB(
+                                          AppSpacing.md,
+                                          0,
+                                          AppSpacing.md,
+                                          contentBottomPadding,
+                                        ),
+                                        sliver: SliverGrid(
+                                          delegate: SliverChildBuilderDelegate((
+                                            context,
+                                            index,
+                                          ) {
+                                            final collectible =
+                                                data.items[index];
+                                            final id = collectible.id;
+                                            final photoRef = id == null
+                                                ? null
+                                                : data.photoRefsByCollectibleId[id];
 
-                                      return CollectibleListCard(
-                                        collectible: collectible,
-                                        photoRef: photoRef,
-                                        onCollectionChanged: _reload,
-                                        detailNavigationContext:
-                                            CollectibleDetailNavigationContext.fromCollectibles(
-                                              source: CollectibleDetailSource
-                                                  .category,
-                                              collectibles: data.items,
-                                              currentCollectible: collectible,
-                                              categoryLabel: widget.category,
-                                            ),
-                                        selectionMode: _isSelectionMode,
-                                        selected:
-                                            id != null &&
-                                            _selectedCollectibleIds.contains(
-                                              id,
-                                            ),
-                                        onSelectionTap: id == null
-                                            ? null
-                                            : () => _toggleSelection(id),
-                                        onLongPressSelection: id == null
-                                            ? null
-                                            : () => _isSelectionMode
-                                                  ? _toggleSelection(id)
-                                                  : _enterSelectionMode(id),
-                                      );
-                                    },
-                                  ),
-                                ),
-                            if (data.items.isNotEmpty && data.hasMore)
-                              SliverToBoxAdapter(
-                                child: Padding(
-                                  padding: EdgeInsets.fromLTRB(
-                                    AppSpacing.md,
-                                    AppSpacing.md,
-                                    AppSpacing.md,
-                                    contentBottomPadding,
-                                  ),
-                                  child: const _InlineCategoryLoader(
-                                    label: 'Scroll to load more...',
-                                  ),
-                                ),
+                                            return CollectibleGridCard(
+                                              collectible: collectible,
+                                              photoRef: photoRef,
+                                              onCollectionChanged: _reload,
+                                              detailNavigationContext:
+                                                  CollectibleDetailNavigationContext.fromCollectibles(
+                                                    source:
+                                                        CollectibleDetailSource
+                                                            .category,
+                                                    collectibles: data.items,
+                                                    currentCollectible:
+                                                        collectible,
+                                                    categoryLabel:
+                                                        widget.category,
+                                                  ),
+                                              selectionMode: _isSelectionMode,
+                                              selected:
+                                                  id != null &&
+                                                  _selectedCollectibleIds
+                                                      .contains(id),
+                                              onSelectionTap: id == null
+                                                  ? null
+                                                  : () => _toggleSelection(id),
+                                              onLongPressSelection: id == null
+                                                  ? null
+                                                  : () => _isSelectionMode
+                                                        ? _toggleSelection(id)
+                                                        : _enterSelectionMode(
+                                                            id,
+                                                          ),
+                                            );
+                                          }, childCount: data.items.length),
+                                          gridDelegate:
+                                              const SliverGridDelegateWithFixedCrossAxisCount(
+                                                crossAxisCount: 3,
+                                                crossAxisSpacing: AppSpacing.sm,
+                                                mainAxisSpacing: AppSpacing.md,
+                                                childAspectRatio: 0.72,
+                                              ),
+                                        ),
+                                      )
+                                    else
+                                      SliverPadding(
+                                        padding: EdgeInsets.fromLTRB(
+                                          AppSpacing.md,
+                                          0,
+                                          AppSpacing.md,
+                                          contentBottomPadding,
+                                        ),
+                                        sliver: SliverList.separated(
+                                          itemCount: data.items.length,
+                                          separatorBuilder: (_, _) =>
+                                              const SizedBox(
+                                                height: AppSpacing.xs,
+                                              ),
+                                          itemBuilder: (context, index) {
+                                            final collectible =
+                                                data.items[index];
+                                            final id = collectible.id;
+                                            final photoRef = id == null
+                                                ? null
+                                                : data.photoRefsByCollectibleId[id];
+
+                                            return CollectibleListCard(
+                                              collectible: collectible,
+                                              photoRef: photoRef,
+                                              onCollectionChanged: _reload,
+                                              detailNavigationContext:
+                                                  CollectibleDetailNavigationContext.fromCollectibles(
+                                                    source:
+                                                        CollectibleDetailSource
+                                                            .category,
+                                                    collectibles: data.items,
+                                                    currentCollectible:
+                                                        collectible,
+                                                    categoryLabel:
+                                                        widget.category,
+                                                  ),
+                                              selectionMode: _isSelectionMode,
+                                              selected:
+                                                  id != null &&
+                                                  _selectedCollectibleIds
+                                                      .contains(id),
+                                              onSelectionTap: id == null
+                                                  ? null
+                                                  : () => _toggleSelection(id),
+                                              onLongPressSelection: id == null
+                                                  ? null
+                                                  : () => _isSelectionMode
+                                                        ? _toggleSelection(id)
+                                                        : _enterSelectionMode(
+                                                            id,
+                                                          ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                  if (data.items.isNotEmpty && data.hasMore)
+                                    SliverToBoxAdapter(
+                                      child: Padding(
+                                        padding: EdgeInsets.fromLTRB(
+                                          AppSpacing.md,
+                                          AppSpacing.md,
+                                          AppSpacing.md,
+                                          contentBottomPadding,
+                                        ),
+                                        child: const _InlineCategoryLoader(
+                                          label: 'Scroll to load more...',
+                                        ),
+                                      ),
+                                    ),
+                                ],
                               ),
+                            ),
                           ],
                         ),
                         if (!_isSelectionMode)
@@ -609,7 +669,6 @@ class _CategoryCollectionScreenState extends State<CategoryCollectionScreen> {
                 ),
               ),
             ),
-            CollectorStickyBackButton(onPressed: _handleBack),
           ],
         ),
       ),
@@ -633,26 +692,63 @@ extension on _CategorySortOption {
   };
 }
 
-class _CategoryPageTitle extends StatelessWidget {
-  const _CategoryPageTitle({required this.category});
+class _CategoryFixedHeader extends StatelessWidget {
+  const _CategoryFixedHeader({
+    required this.category,
+    required this.searchController,
+    required this.searchFocusNode,
+    required this.onBack,
+  });
 
   final String category;
+  final TextEditingController searchController;
+  final FocusNode searchFocusNode;
+  final VoidCallback onBack;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        CategoryIcon(category: category, size: 46),
-        const SizedBox(width: AppSpacing.md),
-        Expanded(
-          child: Text(
-            category,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.headlineLarge,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md,
+        AppSpacing.xs,
+        AppSpacing.md,
+        AppSpacing.sm,
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          SizedBox(
+            height: 48,
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: 'Back',
+                  onPressed: onBack,
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  color: AppColors.primary,
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                Expanded(
+                  child: Text(
+                    category,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
+          const SizedBox(height: AppSpacing.xs),
+          CollectorSearchField(
+            hintText: 'Search in $category',
+            controller: searchController,
+            focusNode: searchFocusNode,
+            readOnly: false,
+            fillColor: AppColors.searchFieldFill,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1363,6 +1459,48 @@ class _EmptyFilterResultsPanel extends StatelessWidget {
   }
 }
 
+class _EmptySearchResultsPanel extends StatelessWidget {
+  const _EmptySearchResultsPanel({
+    required this.category,
+    required this.query,
+    required this.onClearSearch,
+  });
+
+  final String category;
+  final String query;
+  final VoidCallback onClearSearch;
+
+  @override
+  Widget build(BuildContext context) {
+    return CollectorPanel(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.94),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'No items in $category match "$query".',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'Try another term or clear the search to see this category again.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          CollectorButton(
+            label: 'Clear Search',
+            onPressed: onClearSearch,
+            variant: CollectorButtonVariant.secondary,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _InlineCategoryLoader extends StatelessWidget {
   const _InlineCategoryLoader({required this.label});
 
@@ -1459,7 +1597,15 @@ class _CategoryCollectionLoadingState extends StatelessWidget {
             ),
           ],
         ),
-        CollectorStickyBackButton(onPressed: () => Navigator.of(context).pop()),
+        Positioned(
+          left: AppSpacing.md,
+          top: AppSpacing.md,
+          child: IconButton.filled(
+            tooltip: 'Back',
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.arrow_back_rounded),
+          ),
+        ),
         _CategoryStickyAddButton(onTap: () {}),
       ],
     );
@@ -1516,52 +1662,64 @@ class _CategoryCollectionErrorState extends StatelessWidget {
   const _CategoryCollectionErrorState({
     required this.category,
     required this.onRetry,
+    required this.onBack,
   });
 
   final String category;
   final Future<void> Function() onRetry;
+  final VoidCallback onBack;
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: CollectorPanel(
-          padding: const EdgeInsets.all(AppSpacing.xl),
-          backgroundColor: AppColors.surfaceContainer.withValues(alpha: 0.94),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.cloud_off_rounded,
-                color: AppColors.secondary,
-                size: 34,
+    return Stack(
+      children: [
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: CollectorPanel(
+              padding: const EdgeInsets.all(AppSpacing.xl),
+              backgroundColor: AppColors.surfaceContainer.withValues(
+                alpha: 0.94,
               ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Could not load $category.',
-                style: Theme.of(context).textTheme.headlineSmall,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                'Give it another try and we will pull the latest items in this category.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Row(
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  const Icon(
+                    Icons.cloud_off_rounded,
+                    color: AppColors.secondary,
+                    size: 34,
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  Text(
+                    'Could not load $category.',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    'Give it another try and we will pull the latest items in this category.',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: AppColors.onSurfaceVariant,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
                   CollectorButton(label: 'Retry', onPressed: () => onRetry()),
                 ],
               ),
-            ],
+            ),
           ),
         ),
-      ),
+        Positioned(
+          left: AppSpacing.md,
+          top: AppSpacing.md,
+          child: IconButton.filled(
+            tooltip: 'Back',
+            onPressed: onBack,
+            icon: const Icon(Icons.arrow_back_rounded),
+          ),
+        ),
+      ],
     );
   }
 }

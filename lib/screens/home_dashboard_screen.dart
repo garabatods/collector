@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/collector_haptics.dart';
 import '../core/data/archive_repository.dart';
 import '../features/collection/data/repositories/collection_vocabulary_repository.dart';
+import '../features/gamification/presentation/collector_achievement_notifier.dart';
+import '../features/access/data/account_access_service.dart';
+import '../features/access/data/models/account_access.dart';
+import '../features/access/data/revenuecat_service.dart';
+import '../features/access/presentation/pro_paywall_sheet.dart';
 import '../features/collection/data/models/collection_library_navigation_preset.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_radii.dart';
@@ -53,10 +59,11 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   static String? _lastAddCategory;
 
   final _archiveRepository = ArchiveRepository.instance;
+  final _accessService = AccountAccessService.instance;
   final _vocabularyRepository = CollectionVocabularyRepository();
   var _selectedTab = _DashboardTab.home;
   var _refreshSeed = 0;
-  final _librarySearchFocusRequest = 0;
+  var _librarySearchFocusRequest = 0;
   var _librarySelectionDismissRequest = 0;
   var _librarySelectionMode = false;
   var _libraryNavigationRequest = 0;
@@ -70,6 +77,9 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     super.initState();
     WidgetsBinding.instance.addObserver(_lifecycleObserver);
     _archiveRepository.initializeForCurrentUser();
+    _accessService.loadCachedAndRefresh();
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId != null) RevenueCatService.syncUser(userId);
   }
 
   late final WidgetsBindingObserver _lifecycleObserver =
@@ -146,7 +156,31 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     });
   }
 
+  void _openLibrarySearch() {
+    if (_selectedTab != _DashboardTab.library) {
+      CollectorHaptics.selection();
+    }
+    setState(() {
+      _librarySearchFocusRequest++;
+      _selectedTab = _DashboardTab.library;
+    });
+  }
+
   Future<void> _openAddEntrySheet() async {
+    final access = await _accessService.refresh();
+    if (!mounted) return;
+    final canAdd = await _ensureCanAddItem(access);
+    if (!mounted || !canAdd) return;
+    if (access.itemUsage >= 0.8) {
+      final percentage = access.itemUsage >= 0.95 ? '95%' : '80%';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Your archive is over $percentage full (${access.itemCount}/${access.itemLimit}).',
+          ),
+        ),
+      );
+    }
     final categoryOptions = await _loadAddCategoryOptions();
     if (!mounted) {
       return;
@@ -219,6 +253,14 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   }
 
   Future<void> _openScannerFlow({String? initialCategory}) async {
+    final access = await _accessService.refresh();
+    if (!mounted) return;
+    final canAdd = await _ensureCanAddItem(access);
+    if (!mounted || !canAdd) return;
+    if (!access.canUseUpc) {
+      await showOwnzithPaywall(context);
+      return;
+    }
     _rememberAddCategory(initialCategory);
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
@@ -227,12 +269,26 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     );
 
     if (created == true) {
+      await _accessService.refresh();
       _refreshCollectionViews();
       _selectTab(_DashboardTab.library);
+      if (mounted) {
+        await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+          context,
+        );
+      }
     }
   }
 
   Future<void> _openAiPhotoIdFlow({String? initialCategory}) async {
+    final access = await _accessService.refresh();
+    if (!mounted) return;
+    final canAdd = await _ensureCanAddItem(access);
+    if (!mounted || !canAdd) return;
+    if (!access.canUsePhotoId) {
+      await showOwnzithPaywall(context);
+      return;
+    }
     _rememberAddCategory(initialCategory);
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
@@ -242,12 +298,22 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     );
 
     if (created == true) {
+      await _accessService.refresh();
       _refreshCollectionViews();
       _selectTab(_DashboardTab.library);
+      if (mounted) {
+        await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+          context,
+        );
+      }
     }
   }
 
   Future<void> _openManualAddFlow({String? initialCategory}) async {
+    final access = await _accessService.refresh();
+    if (!mounted) return;
+    final canAdd = await _ensureCanAddItem(access);
+    if (!mounted || !canAdd) return;
     _rememberAddCategory(initialCategory);
     final created = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
@@ -257,9 +323,43 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     );
 
     if (created == true) {
+      await _accessService.refresh();
       _refreshCollectionViews();
       _selectTab(_DashboardTab.library);
+      if (mounted) {
+        await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+          context,
+        );
+      }
     }
+  }
+
+  Future<bool> _ensureCanAddItem(AccountAccess access) async {
+    if (access.canAddItem) return true;
+    final upgrade = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Archive limit reached'),
+        content: Text(
+          access.isPro
+              ? 'This archive has reached the standard 10,000-item ceiling. Your data is safe; contact support if you need a reviewed personal-collector override.'
+              : 'Your ${access.itemCount} collectibles are safe. Delete items until you are below 20, or restore Pro, before adding another.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Not now'),
+          ),
+          if (!access.isPro)
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('See Pro'),
+            ),
+        ],
+      ),
+    );
+    if (upgrade == true && mounted) await showOwnzithPaywall(context);
+    return false;
   }
 
   List<Widget> _buildTabs() {
@@ -271,6 +371,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         onAddFirstItem: _openManualAddFlow,
         onScanItem: _openScannerFlow,
         onOpenLibrary: _openLibraryWithPreset,
+        onOpenSearch: _openLibrarySearch,
         onOpenInsights: () => _selectTab(_DashboardTab.insights),
         onOpenProfile: () => _selectTab(_DashboardTab.profile),
         scrollRequest: _homeScrollRequest,

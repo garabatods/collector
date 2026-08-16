@@ -3,7 +3,6 @@ import 'package:collectorapp/features/collection/data/models/collectible_photo_m
 import 'package:collectorapp/features/collection/data/models/tag_model.dart';
 import 'package:collectorapp/features/collection/data/repositories/collectible_photos_repository.dart';
 import 'package:collectorapp/features/profile/data/models/profile_model.dart';
-import 'package:collectorapp/features/wishlist/data/models/wishlist_item_model.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -151,27 +150,6 @@ void main() {
         CollectiblePhotosRepository.contentTypeForFileName('photo.webp'),
         'image/webp',
       );
-    });
-  });
-
-  group('WishlistItemModel', () {
-    test('maps wishlist collector metadata and preserves line_or_series', () {
-      const model = WishlistItemModel(
-        title: 'Spider-Man 2099',
-        category: 'Action Figures',
-        franchise: 'Marvel',
-        lineOrSeries: 'Marvel Legends',
-        characterOrSubject: 'Spider-Man 2099',
-        releaseYear: 2025,
-        boxStatus: 'sealed',
-      );
-
-      final json = model.toInsertJson(userId: 'user-1');
-
-      expect(json['franchise'], 'Marvel');
-      expect(json['line_or_series'], 'Marvel Legends');
-      expect(json['series'], 'Marvel Legends');
-      expect(json['box_status'], 'sealed');
     });
   });
 }

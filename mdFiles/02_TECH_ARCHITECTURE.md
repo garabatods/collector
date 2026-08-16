@@ -26,7 +26,7 @@ Suggested feature areas:
 - collection
 - collectible_detail
 - add_collectible
-- wishlist
+- access and subscriptions
 - profile
 - dashboard
 
@@ -35,7 +35,8 @@ Initial tables:
 - profiles
 - collectibles
 - collectible_photos
-- wishlist_items
+- user_entitlements
+- feature_usage_events
 
 ## Important implementation principles
 - Keep business logic separated from UI

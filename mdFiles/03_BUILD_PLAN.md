@@ -34,7 +34,7 @@
 21. Upload and display one primary photo per collectible
 
 ## Phase 6 — Collector features
-22. Add wishlist
+22. Add Free and Pro access limits
 23. Add search
 24. Add filters
 25. Add simple dashboard stats

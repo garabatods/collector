@@ -1,6 +1,7 @@
 import '../../../../core/data/json_map.dart';
 import '../../../../core/data/local_archive_database.dart';
 import '../../../../core/data/supabase_repository.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/collectible_model.dart';
 import 'tags_repository.dart';
 
@@ -142,11 +143,19 @@ class CollectiblesRepository extends SupabaseRepository {
     Iterable<String>? newTagNames,
   }) async {
     await ensureOnlineForWrite();
-    final data = await client
-        .from('collectibles')
-        .insert(collectible.toInsertJson(userId: currentUserId))
-        .select()
-        .single();
+    late final Map<String, dynamic> data;
+    try {
+      data = await client
+          .from('collectibles')
+          .insert(collectible.toInsertJson(userId: currentUserId))
+          .select()
+          .single();
+    } on PostgrestException catch (error) {
+      if (error.message.contains('OWNZITH_ITEM_LIMIT_REACHED')) {
+        throw const CollectibleLimitException();
+      }
+      rethrow;
+    }
 
     final created = CollectibleModel.fromJson(asJsonMap(data));
     final createdId = created.id;
@@ -276,8 +285,8 @@ class CollectiblesRepository extends SupabaseRepository {
       if (includeCategory)
         'selected_category':
             normalizedCategory == null || normalizedCategory.isEmpty
-                ? null
-                : normalizedCategory,
+            ? null
+            : normalizedCategory,
     };
   }
 
@@ -290,6 +299,14 @@ class CollectiblesRepository extends SupabaseRepository {
       CollectiblePageSort.category => 'category',
     };
   }
+}
+
+class CollectibleLimitException implements Exception {
+  const CollectibleLimitException();
+
+  @override
+  String toString() =>
+      'Your archive limit has been reached. Delete an item or restore Pro before adding another.';
 }
 
 enum CollectiblePageSort {

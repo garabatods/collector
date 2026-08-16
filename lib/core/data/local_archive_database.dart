@@ -10,7 +10,6 @@ import '../../features/collection/data/models/collectible_model.dart';
 import '../../features/collection/data/models/collectible_photo_model.dart';
 import '../../features/collection/data/models/tag_model.dart';
 import '../../features/profile/data/models/profile_model.dart';
-import '../../features/wishlist/data/models/wishlist_item_model.dart';
 import 'json_map.dart';
 
 part 'local_archive_database.g.dart';
@@ -77,29 +76,6 @@ class CollectiblePhotosLocal extends Table {
   Set<Column<Object>> get primaryKey => {id};
 }
 
-class WishlistItemsLocal extends Table {
-  TextColumn get id => text()();
-  TextColumn get userId => text()();
-  TextColumn get title => text()();
-  TextColumn get category => text()();
-  TextColumn get description => text().nullable()();
-  TextColumn get brand => text().nullable()();
-  TextColumn get series => text().nullable()();
-  TextColumn get franchise => text().nullable()();
-  TextColumn get lineOrSeries => text().nullable()();
-  TextColumn get characterOrSubject => text().nullable()();
-  IntColumn get releaseYear => integer().nullable()();
-  TextColumn get boxStatus => text().nullable()();
-  TextColumn get priority => text().nullable()();
-  RealColumn get targetPrice => real().nullable()();
-  TextColumn get notes => text().nullable()();
-  TextColumn get createdAt => text().nullable()();
-  TextColumn get updatedAt => text().nullable()();
-
-  @override
-  Set<Column<Object>> get primaryKey => {id};
-}
-
 class TagsLocal extends Table {
   TextColumn get id => text()();
   TextColumn get userId => text()();
@@ -155,7 +131,6 @@ class ArchiveSyncSnapshot {
     required this.profile,
     required this.collectibles,
     required this.photos,
-    required this.wishlistItems,
     required this.tags,
     required this.tagLinks,
   });
@@ -165,7 +140,6 @@ class ArchiveSyncSnapshot {
   final ProfileModel? profile;
   final List<CollectibleModel> collectibles;
   final List<CollectiblePhotoModel> photos;
-  final List<WishlistItemModel> wishlistItems;
   final List<TagModel> tags;
   final List<ArchiveTagLinkRecord> tagLinks;
 }
@@ -239,7 +213,6 @@ LazyDatabase _openConnection() {
     ProfilesLocal,
     CollectiblesLocal,
     CollectiblePhotosLocal,
-    WishlistItemsLocal,
     TagsLocal,
     CollectibleTagLinksLocal,
     ArchiveSyncStates,
@@ -254,7 +227,7 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
   static final LocalArchiveDatabase instance = LocalArchiveDatabase._();
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -271,6 +244,9 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
       }
       if (from < 3) {
         await _createLocalIndexes();
+      }
+      if (from < 4) {
+        await customStatement('drop table if exists wishlist_items_local');
       }
     },
   );
@@ -295,8 +271,6 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
       'create index if not exists collectible_photos_local_user_item_idx '
           'on collectible_photos_local '
           '(user_id, collectible_id, is_primary desc, display_order, created_at)',
-      'create index if not exists wishlist_items_local_user_created_idx '
-          'on wishlist_items_local (user_id, created_at desc)',
       'create index if not exists tags_local_user_name_idx '
           'on tags_local (user_id, name collate nocase)',
       'create index if not exists tag_links_local_user_item_idx '
@@ -403,41 +377,6 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
       'updated_at': row.updatedAt,
       'collectible_tags': _decodeCollectibleTagsJson(row.tagsJson),
     });
-  }
-
-  Stream<List<WishlistItemModel>> watchWishlistItems(String userId) {
-    final query = select(wishlistItemsLocal)
-      ..where((tbl) => tbl.userId.equals(userId))
-      ..orderBy([(tbl) => OrderingTerm.desc(tbl.createdAt)]);
-    return query.watch().map(
-      (rows) => rows
-          .map(
-            (row) => WishlistItemModel.fromJson({
-              'id': row.id,
-              'user_id': row.userId,
-              'title': row.title,
-              'category': row.category,
-              'description': row.description,
-              'brand': row.brand,
-              'series': row.series,
-              'franchise': row.franchise,
-              'line_or_series': row.lineOrSeries,
-              'character_or_subject': row.characterOrSubject,
-              'release_year': row.releaseYear,
-              'box_status': row.boxStatus,
-              'priority': row.priority,
-              'target_price': row.targetPrice,
-              'notes': row.notes,
-              'created_at': row.createdAt,
-              'updated_at': row.updatedAt,
-            }),
-          )
-          .toList(growable: false),
-    );
-  }
-
-  Future<List<WishlistItemModel>> getWishlistItems(String userId) async {
-    return watchWishlistItems(userId).first;
   }
 
   Stream<List<CollectiblePhotoModel>> watchPhotos(String userId) {
@@ -572,12 +511,7 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
     if (collectible != null) {
       return true;
     }
-    final wishlist = await customSelect(
-      'select 1 from wishlist_items_local where user_id = ? limit 1',
-      variables: [Variable.withString(userId)],
-      readsFrom: {wishlistItemsLocal},
-    ).getSingleOrNull();
-    return wishlist != null;
+    return false;
   }
 
   Future<void> replaceSnapshot(ArchiveSyncSnapshot snapshot) async {
@@ -605,9 +539,6 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
       )..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
       await (delete(
         collectiblePhotosLocal,
-      )..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
-      await (delete(
-        wishlistItemsLocal,
       )..where((tbl) => tbl.userId.equals(snapshot.userId))).go();
       await (delete(
         tagsLocal,
@@ -694,37 +625,6 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
                     displayOrder: Value(photo.displayOrder),
                     createdAt: Value(_dateTimeString(photo.createdAt)),
                     updatedAt: Value(_dateTimeString(photo.updatedAt)),
-                  ),
-                )
-                .toList(growable: false),
-          );
-        });
-      }
-
-      if (snapshot.wishlistItems.isNotEmpty) {
-        await batch((batch) {
-          batch.insertAllOnConflictUpdate(
-            wishlistItemsLocal,
-            snapshot.wishlistItems
-                .map(
-                  (item) => WishlistItemsLocalCompanion.insert(
-                    id: item.id!,
-                    userId: item.userId ?? snapshot.userId,
-                    title: item.title,
-                    category: item.category,
-                    description: Value(item.description),
-                    brand: Value(item.brand),
-                    series: Value(item.series),
-                    franchise: Value(item.franchise),
-                    lineOrSeries: Value(item.lineOrSeries),
-                    characterOrSubject: Value(item.characterOrSubject),
-                    releaseYear: Value(item.releaseYear),
-                    boxStatus: Value(item.boxStatus),
-                    priority: Value(item.priority),
-                    targetPrice: Value(item.targetPrice),
-                    notes: Value(item.notes),
-                    createdAt: Value(_dateTimeString(item.createdAt)),
-                    updatedAt: Value(_dateTimeString(item.updatedAt)),
                   ),
                 )
                 .toList(growable: false),
@@ -944,34 +844,6 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
     });
   }
 
-  Future<void> upsertWishlistItem(WishlistItemModel item, String userId) async {
-    final itemId = item.id;
-    if (itemId == null || itemId.isEmpty) {
-      return;
-    }
-    await into(wishlistItemsLocal).insertOnConflictUpdate(
-      WishlistItemsLocalCompanion.insert(
-        id: itemId,
-        userId: item.userId ?? userId,
-        title: item.title,
-        category: item.category,
-        description: Value(item.description),
-        brand: Value(item.brand),
-        series: Value(item.series),
-        franchise: Value(item.franchise),
-        lineOrSeries: Value(item.lineOrSeries),
-        characterOrSubject: Value(item.characterOrSubject),
-        releaseYear: Value(item.releaseYear),
-        boxStatus: Value(item.boxStatus),
-        priority: Value(item.priority),
-        targetPrice: Value(item.targetPrice),
-        notes: Value(item.notes),
-        createdAt: Value(_dateTimeString(item.createdAt)),
-        updatedAt: Value(_dateTimeString(item.updatedAt)),
-      ),
-    );
-  }
-
   Future<void> upsertTag(TagModel tag, String userId) async {
     final tagId = tag.id;
     if (tagId == null || tagId.isEmpty) {
@@ -985,12 +857,6 @@ class LocalArchiveDatabase extends _$LocalArchiveDatabase {
         createdAt: Value(_dateTimeString(tag.createdAt)),
       ),
     );
-  }
-
-  Future<void> deleteWishlistItem(String userId, String itemId) async {
-    await (delete(
-      wishlistItemsLocal,
-    )..where((tbl) => tbl.userId.equals(userId) & tbl.id.equals(itemId))).go();
   }
 
   Future<void> upsertPhoto(CollectiblePhotoModel photo, String userId) async {

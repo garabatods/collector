@@ -118,4 +118,48 @@ void main() {
       await directory.delete(recursive: true);
     }
   });
+
+  test('v4 removes the old wishlist table and preserves collectibles', () async {
+    await database.close();
+    final directory = await Directory.systemTemp.createTemp(
+      'collector-local-v4-test-',
+    );
+    final file = File('${directory.path}/archive.sqlite');
+    try {
+      final original = LocalArchiveDatabase.forTesting(NativeDatabase(file));
+      await original.upsertCollectible(
+        const CollectibleModel(
+          id: 'kept-item',
+          userId: 'user-1',
+          title: 'Keep Me',
+          category: 'Comics',
+        ),
+        'user-1',
+      );
+      await original.customStatement(
+        'create table wishlist_items_local ('
+        'id text primary key, user_id text not null, title text not null)',
+      );
+      await original.customStatement(
+        "insert into wishlist_items_local values ('wish-1', 'user-1', 'Old Wish')",
+      );
+      await original.customStatement('pragma user_version = 3');
+      await original.close();
+
+      final upgraded = LocalArchiveDatabase.forTesting(NativeDatabase(file));
+      final existing = await upgraded.getCollectibles('user-1');
+      final wishlistTable = await upgraded
+          .customSelect(
+            "select name from sqlite_master where type = 'table' "
+            "and name = 'wishlist_items_local'",
+          )
+          .getSingleOrNull();
+
+      expect(existing.single.title, 'Keep Me');
+      expect(wishlistTable, isNull);
+      await upgraded.close();
+    } finally {
+      await directory.delete(recursive: true);
+    }
+  });
 }

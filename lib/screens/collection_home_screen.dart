@@ -22,7 +22,6 @@ import '../theme/app_fonts.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/archive_bootstrap_gate.dart';
 import '../widgets/category_icon.dart';
-import '../widgets/collector_badge_unlock_sheet.dart';
 import '../widgets/collectible_grid_card.dart';
 import '../widgets/collector_button.dart';
 import '../widgets/collector_panel.dart';
@@ -30,7 +29,6 @@ import '../widgets/collector_section_header.dart';
 import '../widgets/collector_skeleton.dart';
 import '../widgets/home_collector_goals_panel.dart';
 import '../widgets/home_collection_insight_card.dart';
-import '../widgets/resolved_avatar_image.dart';
 import 'all_categories_screen.dart';
 import 'category_collection_screen.dart';
 
@@ -48,6 +46,7 @@ class CollectionHomeScreen extends StatefulWidget {
     required this.onAddFirstItem,
     required this.onScanItem,
     required this.onOpenLibrary,
+    required this.onOpenSearch,
     required this.onOpenInsights,
     required this.onOpenProfile,
     this.scrollRequest,
@@ -60,6 +59,7 @@ class CollectionHomeScreen extends StatefulWidget {
   final VoidCallback onAddFirstItem;
   final VoidCallback onScanItem;
   final ValueChanged<CollectionLibraryNavigationPreset?> onOpenLibrary;
+  final VoidCallback onOpenSearch;
   final VoidCallback onOpenInsights;
   final VoidCallback onOpenProfile;
   final int? scrollRequest;
@@ -124,10 +124,9 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
 
             if (data.collectibles.isEmpty) {
               return _EmptyHomeState(
-                wishlistCount: data.wishlistCount,
                 onAddFirstItem: widget.onAddFirstItem,
                 onScanItem: widget.onScanItem,
-                onOpenProfile: widget.onOpenProfile,
+                onOpenSearch: widget.onOpenSearch,
               );
             }
 
@@ -140,6 +139,7 @@ class _CollectionHomeScreenState extends State<CollectionHomeScreen> {
                   onCollectionChanged: _reload,
                   onAddFirstItem: widget.onAddFirstItem,
                   onOpenLibrary: widget.onOpenLibrary,
+                  onOpenSearch: widget.onOpenSearch,
                   onOpenInsights: widget.onOpenInsights,
                   onOpenProfile: widget.onOpenProfile,
                   scrollRequest: widget.scrollRequest,
@@ -162,6 +162,7 @@ class _LoadedHomeState extends StatefulWidget {
     required this.onCollectionChanged,
     required this.onAddFirstItem,
     required this.onOpenLibrary,
+    required this.onOpenSearch,
     required this.onOpenInsights,
     required this.onOpenProfile,
     this.scrollRequest,
@@ -174,6 +175,7 @@ class _LoadedHomeState extends StatefulWidget {
   final Future<void> Function() onCollectionChanged;
   final VoidCallback onAddFirstItem;
   final ValueChanged<CollectionLibraryNavigationPreset?> onOpenLibrary;
+  final VoidCallback onOpenSearch;
   final VoidCallback onOpenInsights;
   final VoidCallback onOpenProfile;
   final int? scrollRequest;
@@ -193,15 +195,14 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
   HomeCollectionInsightHistory? _insightHistory;
   HomeCollectionInsight? _selectedInsight;
   List<CollectorGoal> _collectorGoals = const [];
-  List<CollectorBadgeAward> _pendingBadgeAwards = const [];
   bool _isResolvingInsight = true;
-  bool _isShowingBadgeUnlockSheet = false;
   String? _pendingGamificationSignature;
 
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
+    _badgeAwardStore.revision.addListener(_handleBadgeAwardsChanged);
     _loadInsightHistory();
     if (widget.isActive) {
       _syncGamification();
@@ -210,8 +211,15 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
 
   @override
   void dispose() {
+    _badgeAwardStore.revision.removeListener(_handleBadgeAwardsChanged);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _handleBadgeAwardsChanged() {
+    if (!mounted) return;
+    _pendingGamificationSignature = null;
+    _syncGamification();
   }
 
   @override
@@ -223,9 +231,6 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
     if (widget.isActive &&
         (oldWidget.data != widget.data || !oldWidget.isActive)) {
       _syncGamification();
-    }
-    if (widget.isActive && !oldWidget.isActive) {
-      _tryShowPendingBadgeAwards();
     }
     if ((oldWidget.scrollRequest ?? 0) != (widget.scrollRequest ?? 0) &&
         widget.scrollTarget != null) {
@@ -272,8 +277,7 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
               ),
               child: _HomeWelcomeHeader(
                 profile: widget.data.profile,
-                profileAvatarUrl: widget.data.profile?.avatarUrl?.trim(),
-                onOpenProfile: widget.onOpenProfile,
+                onOpenSearch: widget.onOpenSearch,
               ),
             ),
           ),
@@ -591,78 +595,11 @@ class _LoadedHomeStateState extends State<_LoadedHomeState> {
       setState(() {
         _collectorGoals = goals;
       });
-
-      if (syncResult.newAwards.isEmpty) {
-        return;
-      }
-
-      _queueBadgeAwards(syncResult.newAwards);
     } finally {
       if (_pendingGamificationSignature == progressSignature) {
         _pendingGamificationSignature = null;
       }
     }
-  }
-
-  void _queueBadgeAwards(List<CollectorBadgeAward> awards) {
-    if (awards.isEmpty) {
-      return;
-    }
-
-    final pendingById = {
-      for (final award in _pendingBadgeAwards) award.badge.id: award,
-    };
-    for (final award in awards) {
-      pendingById[award.badge.id] = award;
-    }
-    _pendingBadgeAwards = pendingById.values.toList(growable: false);
-    _tryShowPendingBadgeAwards();
-  }
-
-  void _tryShowPendingBadgeAwards() {
-    if (_isShowingBadgeUnlockSheet ||
-        _pendingBadgeAwards.isEmpty ||
-        !widget.isActive ||
-        !(ModalRoute.of(context)?.isCurrent ?? false)) {
-      return;
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted ||
-          _isShowingBadgeUnlockSheet ||
-          _pendingBadgeAwards.isEmpty ||
-          !widget.isActive ||
-          !(ModalRoute.of(context)?.isCurrent ?? false)) {
-        return;
-      }
-
-      final awards = _pendingBadgeAwards;
-      setState(() {
-        _pendingBadgeAwards = const [];
-        _isShowingBadgeUnlockSheet = true;
-      });
-
-      try {
-        CollectorHaptics.medium();
-        await showModalBottomSheet<void>(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (context) => CollectorBadgeUnlockSheet(
-            awards: awards,
-            primaryActionLabel: 'View Badges',
-            onPrimaryAction: widget.onOpenProfile,
-          ),
-        );
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isShowingBadgeUnlockSheet = false;
-          });
-          _tryShowPendingBadgeAwards();
-        }
-      }
-    });
   }
 
   Future<void> _resolveInsight() async {
@@ -798,16 +735,14 @@ class _HomeInsightSessionSelection {
 
 class _EmptyHomeState extends StatelessWidget {
   const _EmptyHomeState({
-    required this.wishlistCount,
     required this.onAddFirstItem,
     required this.onScanItem,
-    required this.onOpenProfile,
+    required this.onOpenSearch,
   });
 
-  final int wishlistCount;
   final VoidCallback onAddFirstItem;
   final VoidCallback onScanItem;
-  final VoidCallback onOpenProfile;
+  final VoidCallback onOpenSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -817,7 +752,7 @@ class _EmptyHomeState extends StatelessWidget {
 
     return Column(
       children: [
-        _HomeTopChrome(onOpenProfile: onOpenProfile),
+        _HomeTopChrome(onOpenSearch: onOpenSearch),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -884,9 +819,7 @@ class _EmptyHomeState extends StatelessWidget {
                             ConstrainedBox(
                               constraints: const BoxConstraints(maxWidth: 320),
                               child: Text(
-                                wishlistCount == 0
-                                    ? 'Your archive is currently empty. Start cataloging your toys, board games, and comics to build your digital vault.'
-                                    : 'Your archive is currently empty. Turn that wishlist momentum into a real collection and build your digital vault.',
+                                'Your archive is currently empty. Start cataloging your toys, board games, and comics to build your digital vault.',
                                 textAlign: TextAlign.center,
                                 style: Theme.of(context).textTheme.bodyLarge
                                     ?.copyWith(
@@ -1105,30 +1038,21 @@ class _HomeCollectionInsightSkeleton extends StatelessWidget {
 }
 
 class _HomeWelcomeHeader extends StatelessWidget {
-  const _HomeWelcomeHeader({
-    this.profile,
-    this.profileAvatarUrl,
-    required this.onOpenProfile,
-  });
+  const _HomeWelcomeHeader({this.profile, required this.onOpenSearch});
 
   final ProfileModel? profile;
-  final String? profileAvatarUrl;
-  final VoidCallback onOpenProfile;
+  final VoidCallback onOpenSearch;
 
   @override
   Widget build(BuildContext context) {
-    return _HomeHeaderBar(
-      profile: profile,
-      profileAvatarUrl: profileAvatarUrl,
-      onOpenProfile: onOpenProfile,
-    );
+    return _HomeHeaderBar(profile: profile, onOpenSearch: onOpenSearch);
   }
 }
 
 class _HomeTopChrome extends StatelessWidget {
-  const _HomeTopChrome({required this.onOpenProfile});
+  const _HomeTopChrome({required this.onOpenSearch});
 
-  final VoidCallback onOpenProfile;
+  final VoidCallback onOpenSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -1145,7 +1069,7 @@ class _HomeTopChrome extends StatelessWidget {
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
           alignment: Alignment.topCenter,
-          child: _HomeHeaderBar(onOpenProfile: onOpenProfile),
+          child: _HomeHeaderBar(onOpenSearch: onOpenSearch),
         ),
       ),
     );
@@ -1153,15 +1077,10 @@ class _HomeTopChrome extends StatelessWidget {
 }
 
 class _HomeHeaderBar extends StatelessWidget {
-  const _HomeHeaderBar({
-    this.profile,
-    this.profileAvatarUrl,
-    required this.onOpenProfile,
-  });
+  const _HomeHeaderBar({this.profile, required this.onOpenSearch});
 
   final ProfileModel? profile;
-  final String? profileAvatarUrl;
-  final VoidCallback onOpenProfile;
+  final VoidCallback onOpenSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -1201,11 +1120,7 @@ class _HomeHeaderBar extends StatelessWidget {
               ),
             ),
             const SizedBox(width: AppSpacing.sm),
-            _HomeProfilePlaceholder(
-              profile: profile,
-              profileAvatarUrl: profileAvatarUrl,
-              onTap: onOpenProfile,
-            ),
+            _HomeSearchButton(onTap: onOpenSearch),
           ],
         ),
       ],
@@ -1227,88 +1142,39 @@ String _homeGreetingName(ProfileModel? profile) {
   return 'Collector';
 }
 
-class _HomeProfilePlaceholder extends StatelessWidget {
-  const _HomeProfilePlaceholder({
-    this.profile,
-    this.profileAvatarUrl,
-    required this.onTap,
-  });
+class _HomeSearchButton extends StatelessWidget {
+  const _HomeSearchButton({required this.onTap});
 
-  final ProfileModel? profile;
-  final String? profileAvatarUrl;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final displayName = profile?.displayName?.trim();
-    final username = profile?.username?.trim();
-    final initialsSource = (displayName?.isNotEmpty == true
-        ? displayName!
-        : username?.isNotEmpty == true
-        ? username!
-        : 'Collector');
-
-    final initials = initialsSource
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .take(2)
-        .map((part) => part.characters.first.toUpperCase())
-        .join();
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            color: AppColors.surfaceContainerHighest,
+    return Semantics(
+      button: true,
+      label: 'Search collection',
+      child: Tooltip(
+        message: 'Search collection',
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: AppColors.outlineVariant.withValues(alpha: 0.22),
+            child: Ink(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: AppColors.outlineVariant.withValues(alpha: 0.22),
+                ),
+              ),
+              child: const Icon(
+                Icons.search_rounded,
+                color: AppColors.primary,
+                size: 28,
+              ),
             ),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(15),
-            child: ResolvedAvatarImage(
-              avatarSource: profileAvatarUrl,
-              fit: BoxFit.cover,
-              fallback: _HomeAvatarFallback(initials: initials),
-              error: _HomeAvatarFallback(initials: initials),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _HomeAvatarFallback extends StatelessWidget {
-  const _HomeAvatarFallback({required this.initials});
-
-  final String initials;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColors.primary.withValues(alpha: 0.24),
-            AppColors.tertiary.withValues(alpha: 0.24),
-          ],
-        ),
-      ),
-      child: Center(
-        child: Text(
-          initials.isEmpty ? 'C' : initials,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            color: AppColors.onSurface,
-            fontWeight: FontWeight.w700,
           ),
         ),
       ),

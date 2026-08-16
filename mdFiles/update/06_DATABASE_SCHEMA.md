@@ -25,7 +25,7 @@ Tagging migration:
 
 ## Core design decisions
 - Use Supabase Auth `auth.users` as the identity source
-- Keep `category` as plain text on `collectibles` and `wishlist_items`
+- Keep `category` as plain text on `collectibles`
 - Reject the literal value `New Category` at the database layer
 - Use Row Level Security on all app tables
 - Create profiles automatically when new auth users are inserted
@@ -41,7 +41,6 @@ The second migration makes the schema feel less like generic inventory and more 
 
 What changed:
 - `collectibles` now supports `franchise`, `line_or_series`, `character_or_subject`, `release_year`, `box_status`, and `is_duplicate`
-- `wishlist_items` now supports `franchise`, `line_or_series`, `character_or_subject`, `release_year`, and `box_status`
 - existing `series` data is backfilled into `line_or_series`
 - `release_year` is lightly validated to a practical range
 - `box_status` is limited to a small collector-friendly set:
@@ -194,40 +193,6 @@ Rules:
 - one tag can be reused across many collectibles
 - duplicate collectible/tag pairs are prevented by the composite primary key
 
-### `wishlist_items`
-Purpose:
-- store items the user wants to acquire later
-
-Columns:
-- `id uuid primary key`
-- `user_id uuid` owner, references `auth.users(id)`
-- `title text` required
-- `category text` required
-- `description text` optional
-- `brand text` optional
-- `series text` optional
-- `franchise text` optional
-- `line_or_series text` optional
-- `character_or_subject text` optional
-- `release_year integer` optional
-- `box_status text` optional
-- `priority text` default `medium`
-- `target_price numeric(12,2)` optional
-- `notes text` optional
-- `created_at timestamptz`
-- `updated_at timestamptz`
-
-Rules:
-- `priority` is limited to `low | medium | high`
-- `category` remains text for MVP
-- `category` cannot be `New Category`
-- `release_year` must be between `1900` and next calendar year when provided
-- `box_status`, when provided, must be one of `sealed | boxed | partial_box | loose`
-
-Collector note:
-- wishlist items intentionally do not get `is_duplicate`
-- `line_or_series` is preferred over `series` for future reads and writes
-
 ## Triggers and helper functions
 
 ### `set_updated_at()`
@@ -235,7 +200,6 @@ Used on:
 - `profiles`
 - `collectibles`
 - `collectible_photos`
-- `wishlist_items`
 
 Behavior:
 - updates `updated_at` automatically before row updates
@@ -251,7 +215,6 @@ RLS is enabled and forced on:
 - `profiles`
 - `collectibles`
 - `collectible_photos`
-- `wishlist_items`
 - `tags`
 - `collectible_tags`
 
@@ -259,7 +222,6 @@ Policy behavior:
 - users can only read and mutate their own `profiles` row
 - users can only read and mutate their own `collectibles`
 - users can only read and mutate `collectible_photos` attached to their own collectibles
-- users can only read and mutate their own `wishlist_items`
 - users can only read and mutate their own `tags`
 - users can only read and mutate `collectible_tags` rows when both the collectible and tag belong to them
 
@@ -294,7 +256,6 @@ Important indexes included:
 - owner/franchise and duplicate-filter indexes on `collectibles`
 - partial indexes for favorite, grail, and trade filters
 - foreign key/index support for `collectible_photos.collectible_id`
-- owner/date and owner/priority indexes on `wishlist_items`
 - case-insensitive unique tag-name index on `(user_id, lower(name))`
 - foreign key/index support for `collectible_tags.collectible_id` and `collectible_tags.tag_id`
 

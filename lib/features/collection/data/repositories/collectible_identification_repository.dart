@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/data/json_map.dart';
@@ -14,6 +16,13 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
 
   static const _cachePrefix = 'identification:';
   static const _photoCacheVersion = 'luna-terra-v1';
+  static const _acceptedPhotoMimeTypes = {
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/heic',
+    'image/heif',
+  };
 
   Future<CollectibleIdentificationResult> identifyBarcode(
     String barcode,
@@ -37,7 +46,11 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
 
     try {
       final response = await _invokeIdentifyCollectible(
-        body: {'mode': 'barcode', 'barcode': normalizedBarcode},
+        body: {
+          'mode': 'barcode',
+          'barcode': normalizedBarcode,
+          'request_id': _newRequestId(),
+        },
       );
 
       final result = CollectibleIdentificationResult.fromJson(
@@ -63,14 +76,33 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
     required String mimeType,
     String? barcode,
   }) async {
-    final normalizedMimeType = mimeType.trim().toLowerCase();
-    if (imageBytes.isEmpty || !normalizedMimeType.startsWith('image/')) {
+    var normalizedMimeType = mimeType.trim().toLowerCase();
+    if (imageBytes.isEmpty ||
+        !_acceptedPhotoMimeTypes.contains(normalizedMimeType)) {
       throw const CollectibleIdentificationException(
-        'Choose a valid image before running AI identification.',
+        'Choose a JPEG, PNG, WebP, HEIC, or HEIF photo.',
+      );
+    }
+    var uploadBytes = imageBytes;
+    if (normalizedMimeType == 'image/heic' ||
+        normalizedMimeType == 'image/heif' ||
+        uploadBytes.lengthInBytes > 8 * 1024 * 1024) {
+      uploadBytes = await FlutterImageCompress.compressWithList(
+        uploadBytes,
+        minWidth: 2400,
+        minHeight: 2400,
+        quality: 90,
+        format: CompressFormat.jpeg,
+      );
+      normalizedMimeType = 'image/jpeg';
+    }
+    if (uploadBytes.lengthInBytes > 8 * 1024 * 1024) {
+      throw const CollectibleIdentificationException(
+        'Choose a photo that is 8 MB or smaller.',
       );
     }
 
-    final fingerprint = sha256.convert(imageBytes).toString();
+    final fingerprint = sha256.convert(uploadBytes).toString();
     final cacheKey = '${_cachePrefix}photo:$_photoCacheVersion:$fingerprint';
     final cached = SessionCache.get<CollectibleIdentificationResult>(cacheKey);
     if (cached != null) {
@@ -81,9 +113,10 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
       final response = await _invokeIdentifyCollectible(
         body: {
           'mode': 'photo',
-          'image_base64': base64Encode(imageBytes),
+          'image_base64': base64Encode(uploadBytes),
           'mime_type': normalizedMimeType,
           'barcode': _normalizeBarcode(barcode ?? ''),
+          'request_id': _newRequestId(),
         },
       );
 
@@ -118,9 +151,32 @@ class CollectibleIdentificationRepository extends SupabaseRepository {
     return normalized;
   }
 
+  static String _newRequestId() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    String hex(int value) => value.toRadixString(16).padLeft(2, '0');
+    final value = bytes.map(hex).join();
+    return '${value.substring(0, 8)}-'
+        '${value.substring(8, 12)}-'
+        '${value.substring(12, 16)}-'
+        '${value.substring(16, 20)}-'
+        '${value.substring(20)}';
+  }
+
   static bool _shouldRefreshBarcodeResult(
     CollectibleIdentificationResult result,
   ) {
+    // A GO-UPC result may be an older session-cache entry from before Metron
+    // became the preferred comic catalog. Refresh it once: the server either
+    // upgrades a comic to Metron or returns a remote cache result, preventing
+    // repeated provider calls for ordinary products. This also applies to an
+    // old GO-UPC miss, because Metron may know the comic when GO-UPC did not.
+    if (result.providerStage == CollectibleIdentificationProviderStage.goupc) {
+      return true;
+    }
+
     if (!result.hasCatalogMatch) {
       return false;
     }

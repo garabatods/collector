@@ -84,7 +84,8 @@ const collectorLevelDefinitions = <CollectorLevelDefinition>[
   CollectorLevelDefinition(
     level: 5,
     title: 'Collection Master',
-    description: 'You have unlocked the highest current collector standing.',
+    description:
+        'You reached the highest current standing. Keep collecting to complete every badge.',
     minBadges: 11,
     maxBadges: 13,
   ),

@@ -1,6 +1,5 @@
 import '../../features/collection/data/models/collectible_model.dart';
 import '../../features/profile/data/models/profile_model.dart';
-import '../../features/wishlist/data/models/wishlist_item_model.dart';
 
 class SyncStatus {
   const SyncStatus({
@@ -60,7 +59,6 @@ class ArchiveHomeSummary {
     required this.userId,
     required this.profile,
     required this.collectibles,
-    required this.wishlistCount,
     required this.recentItems,
     required this.favoriteItems,
     required this.photoRefsByCollectibleId,
@@ -69,7 +67,6 @@ class ArchiveHomeSummary {
   final String userId;
   final ProfileModel? profile;
   final List<CollectibleModel> collectibles;
-  final int wishlistCount;
   final List<CollectibleModel> recentItems;
   final List<CollectibleModel> favoriteItems;
   final Map<String, ArchivePhotoRef> photoRefsByCollectibleId;
@@ -173,7 +170,6 @@ class ArchiveProfileSummary {
     required this.photoCount,
     required this.topCategoryItemCount,
     required this.topFranchiseItemCount,
-    required this.wishlistCount,
     required this.latestItem,
     required this.featuredItem,
     required this.featuredPhotoRef,
@@ -189,15 +185,8 @@ class ArchiveProfileSummary {
   final int photoCount;
   final int topCategoryItemCount;
   final int topFranchiseItemCount;
-  final int wishlistCount;
   final CollectibleModel? latestItem;
   final CollectibleModel? featuredItem;
   final ArchivePhotoRef? featuredPhotoRef;
   final String? favoriteCategory;
-}
-
-class ArchiveWishlistSummary {
-  const ArchiveWishlistSummary({required this.items});
-
-  final List<WishlistItemModel> items;
 }

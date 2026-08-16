@@ -10,6 +10,9 @@ import '../features/collection/data/models/collectible_model.dart';
 import '../features/collection/data/models/collectible_identification_result.dart';
 import '../features/collection/data/repositories/collectible_identification_repository.dart';
 import '../features/collection/data/repositories/collectible_photos_repository.dart';
+import '../features/collection/data/repositories/barcode_scan_diagnostics_repository.dart';
+import '../features/collection/data/services/collectible_barcode_capture_resolver.dart';
+import '../features/collection/data/services/comic_supplement_consensus.dart';
 import '../features/collection/data/repositories/collectibles_repository.dart';
 import '../features/collection/data/services/add_item_autofill_resolver.dart';
 import '../features/collection/data/repositories/collection_vocabulary_repository.dart';
@@ -35,19 +38,21 @@ class ScannerFlowScreen extends StatefulWidget {
 }
 
 class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
-  final MobileScannerController _controller = MobileScannerController(
-    detectionSpeed: DetectionSpeed.noDuplicates,
-    formats: const [
-      BarcodeFormat.ean8,
-      BarcodeFormat.ean13,
-      BarcodeFormat.upcA,
-      BarcodeFormat.upcE,
-      BarcodeFormat.code128,
-      BarcodeFormat.code39,
-      BarcodeFormat.code93,
-      BarcodeFormat.itf14,
-    ],
-  );
+  static const _diagnosticBuildNumber = 9;
+  static const _scannerVersion = 'comic-ocr-v2-wide-region';
+  static const _comicSupplementTimeout = Duration(milliseconds: 3200);
+  static const _scannerFormats = <BarcodeFormat>[
+    BarcodeFormat.ean8,
+    BarcodeFormat.ean13,
+    BarcodeFormat.upcA,
+    BarcodeFormat.upcE,
+    BarcodeFormat.code128,
+    BarcodeFormat.code39,
+    BarcodeFormat.code93,
+    BarcodeFormat.itf14,
+  ];
+
+  late MobileScannerController _controller;
   final CollectibleIdentificationRepository _identificationRepository =
       CollectibleIdentificationRepository();
   final AddItemAutofillResolver _autofillResolver = AddItemAutofillResolver();
@@ -55,6 +60,8 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
       CollectiblesRepository();
   final CollectiblePhotosRepository _photosRepository =
       CollectiblePhotosRepository();
+  final BarcodeScanDiagnosticsRepository _scanDiagnosticsRepository =
+      BarcodeScanDiagnosticsRepository();
 
   String? _detectedBarcode;
   CollectibleIdentificationResult? _lookupResult;
@@ -64,15 +71,42 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
   bool _isScannerPaused = false;
   bool _isQuickScanEnabled = false;
   bool _createdItemInSession = false;
+  bool _comicOcrEnabled = false;
+  bool _isReadingComicSupplement = false;
+  bool _showSupplementPrompt = false;
+  String? _comicBaseBarcode;
+  String? _comicSupplementCandidate;
+  int _comicSupplementObservationCount = 0;
+  int _comicTotalObservations = 0;
+  DateTime? _comicScanStartedAt;
+  Timer? _comicSupplementTimer;
+  final ComicSupplementConsensus _comicConsensus = ComicSupplementConsensus();
 
   @override
   void initState() {
     super.initState();
+    _comicOcrEnabled = _isComicCategory(widget.initialCategory);
+    _controller = _createScannerController(_comicOcrEnabled);
     CollectorSoundEffects.warmUpScan();
+  }
+
+  static bool _isComicCategory(String? category) =>
+      category?.trim().toLowerCase() == 'comics';
+
+  MobileScannerController _createScannerController(bool comicOcrEnabled) {
+    return MobileScannerController(
+      detectionSpeed: comicOcrEnabled
+          ? DetectionSpeed.normal
+          : DetectionSpeed.noDuplicates,
+      detectionTimeoutMs: comicOcrEnabled ? 200 : 250,
+      formats: _scannerFormats,
+      comicSupplementOcrEnabled: comicOcrEnabled,
+    );
   }
 
   @override
   void dispose() {
+    _comicSupplementTimer?.cancel();
     unawaited(CollectorSoundEffects.disposeScan());
     _controller.dispose();
     super.dispose();
@@ -83,14 +117,68 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
       return;
     }
 
-    final barcode = capture.barcodes
-        .map((item) => item.rawValue?.trim())
-        .whereType<String>()
-        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    Barcode? detected;
+    String barcode = '';
+    for (final item in capture.barcodes) {
+      final resolved = CollectibleBarcodeCaptureResolver.resolve(
+        rawValue: item.rawValue,
+        displayValue: item.displayValue,
+      );
+      if (resolved.isNotEmpty) {
+        detected = item;
+        barcode = resolved;
+        break;
+      }
+    }
 
     if (barcode.isEmpty) {
       return;
     }
+
+    if (_comicOcrEnabled && detected != null) {
+      final digits = barcode.replaceAll(RegExp(r'\D'), '');
+      if (digits.length == 17 || digits.length == 18) {
+        final baseBarcode = (detected.rawValue ?? '').replaceAll(
+          RegExp(r'\D'),
+          '',
+        );
+        if ((baseBarcode.length == 12 || baseBarcode.length == 13) &&
+            detected.supplementalValue != null) {
+          unawaited(
+            _recordScannerDiagnostic(
+              outcome: 'confirmed',
+              baseBarcode: baseBarcode,
+              supplement: detected.supplementalValue,
+              source: detected.supplementalSource ?? 'vision_barcode',
+            ),
+          );
+        }
+        await _processResolvedBarcode(digits);
+        return;
+      }
+
+      final baseBarcode = (detected.rawValue ?? barcode).replaceAll(
+        RegExp(r'\D'),
+        '',
+      );
+      if (baseBarcode.length == 12 || baseBarcode.length == 13) {
+        await _handleComicSupplementObservation(
+          baseBarcode: baseBarcode,
+          candidate: detected.supplementalValue,
+          confidence: detected.supplementalConfidence,
+          source: detected.supplementalSource,
+        );
+        return;
+      }
+    }
+
+    await _processResolvedBarcode(barcode);
+  }
+
+  Future<void> _processResolvedBarcode(String barcode) async {
+    _comicSupplementTimer?.cancel();
+    _isReadingComicSupplement = false;
+    _showSupplementPrompt = false;
 
     _isHandlingDetection = true;
     CollectorSoundEffects.playScan();
@@ -118,6 +206,228 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
       await _lookupBarcode(barcode);
     } finally {
       _isHandlingDetection = false;
+    }
+  }
+
+  Future<void> _handleComicSupplementObservation({
+    required String baseBarcode,
+    required String? candidate,
+    required double? confidence,
+    required String? source,
+  }) async {
+    if (_comicBaseBarcode != baseBarcode) {
+      _comicConsensus.reset();
+      _comicSupplementTimer?.cancel();
+      _comicScanStartedAt = DateTime.now();
+      _comicSupplementTimer = Timer(
+        _comicSupplementTimeout,
+        () => unawaited(_handleComicSupplementTimeout()),
+      );
+    }
+
+    final update = _comicConsensus.observe(
+      ComicSupplementObservation(
+        baseBarcode: baseBarcode,
+        candidate: candidate,
+        confidence: confidence,
+        source: source,
+      ),
+    );
+
+    if (mounted) {
+      setState(() {
+        _comicBaseBarcode = baseBarcode;
+        _comicSupplementCandidate = update.leadingCandidate;
+        _comicSupplementObservationCount = update.leadingCount;
+        _comicTotalObservations = update.totalObservations;
+        _isReadingComicSupplement = true;
+        _showSupplementPrompt = false;
+      });
+    }
+
+    final supplement = update.confirmedSupplement;
+    if (supplement == null || _isHandlingDetection) {
+      return;
+    }
+
+    final completeBarcode = '$baseBarcode$supplement';
+    unawaited(
+      _recordScannerDiagnostic(
+        outcome: 'confirmed',
+        baseBarcode: baseBarcode,
+        supplement: supplement,
+        source: source ?? 'vision_ocr',
+      ),
+    );
+    await _processResolvedBarcode(completeBarcode);
+  }
+
+  Future<void> _handleComicSupplementTimeout() async {
+    if (!_isReadingComicSupplement || _isHandlingDetection) {
+      return;
+    }
+
+    await _controller.stop();
+    _isScannerPaused = true;
+    final baseBarcode = _comicBaseBarcode;
+    if (!mounted || baseBarcode == null) {
+      return;
+    }
+
+    unawaited(
+      _recordScannerDiagnostic(
+        outcome: 'timeout',
+        baseBarcode: baseBarcode,
+        supplement: _comicSupplementCandidate,
+        source: 'vision_ocr',
+      ),
+    );
+
+    setState(() {
+      _detectedBarcode = baseBarcode;
+      _lookupResult = null;
+      _lookupMessage = null;
+      _lookupPhase = _LookupPhase.idle;
+      _isReadingComicSupplement = false;
+      _showSupplementPrompt = true;
+    });
+  }
+
+  Future<void> _retryComicSupplementScan() async {
+    _resetComicSupplementState();
+    setState(() {
+      _detectedBarcode = null;
+      _lookupResult = null;
+      _lookupMessage = null;
+      _lookupPhase = _LookupPhase.idle;
+      _showSupplementPrompt = false;
+    });
+    if (_isScannerPaused) {
+      await _controller.start();
+      _isScannerPaused = false;
+    }
+  }
+
+  Future<void> _continueWithSeriesOnly() async {
+    final baseBarcode = _comicBaseBarcode ?? _detectedBarcode;
+    if (baseBarcode == null) return;
+    unawaited(
+      _recordScannerDiagnostic(
+        outcome: 'series_only',
+        baseBarcode: baseBarcode,
+        supplement: _comicSupplementCandidate,
+        source: 'user_choice',
+      ),
+    );
+    await _processResolvedBarcode(baseBarcode);
+  }
+
+  Future<void> _enterComicSupplementManually() async {
+    final baseBarcode = _comicBaseBarcode ?? _detectedBarcode;
+    if (baseBarcode == null) return;
+    final inputController = TextEditingController();
+    final supplement = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Enter the 5-digit issue code'),
+        content: TextField(
+          controller: inputController,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          maxLength: 5,
+          decoration: const InputDecoration(
+            hintText: 'Example: 00421',
+            helperText: 'Use the five small digits printed beside the barcode.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final digits = inputController.text.replaceAll(RegExp(r'\D'), '');
+              if (digits.length == 5) {
+                Navigator.of(dialogContext).pop(digits);
+              }
+            },
+            child: const Text('Check Metron'),
+          ),
+        ],
+      ),
+    );
+    inputController.dispose();
+    if (!mounted || supplement == null) return;
+
+    unawaited(
+      _recordScannerDiagnostic(
+        outcome: 'manual',
+        baseBarcode: baseBarcode,
+        supplement: supplement,
+        source: 'manual',
+      ),
+    );
+    await _processResolvedBarcode('$baseBarcode$supplement');
+  }
+
+  Future<void> _startComicIssueScan() async {
+    final oldController = _controller;
+    await oldController.stop();
+    final replacement = _createScannerController(true);
+    _resetComicSupplementState();
+    if (!mounted) {
+      await replacement.dispose();
+      return;
+    }
+    setState(() {
+      _controller = replacement;
+      _comicOcrEnabled = true;
+      _isScannerPaused = false;
+      _detectedBarcode = null;
+      _lookupResult = null;
+      _lookupMessage = null;
+      _lookupPhase = _LookupPhase.idle;
+    });
+    await oldController.dispose();
+  }
+
+  void _resetComicSupplementState() {
+    _comicSupplementTimer?.cancel();
+    _comicConsensus.reset();
+    _comicBaseBarcode = null;
+    _comicSupplementCandidate = null;
+    _comicSupplementObservationCount = 0;
+    _comicTotalObservations = 0;
+    _comicScanStartedAt = null;
+    _isReadingComicSupplement = false;
+    _showSupplementPrompt = false;
+  }
+
+  Future<void> _recordScannerDiagnostic({
+    required String outcome,
+    required String baseBarcode,
+    required String? supplement,
+    required String source,
+  }) async {
+    final startedAt = _comicScanStartedAt;
+    final durationMs = startedAt == null
+        ? 0
+        : DateTime.now().difference(startedAt).inMilliseconds;
+    try {
+      await _scanDiagnosticsRepository.record(
+        buildNumber: _diagnosticBuildNumber,
+        scannerVersion: _scannerVersion,
+        category: widget.initialCategory,
+        baseBarcode: baseBarcode,
+        supplement: supplement,
+        source: source,
+        outcome: outcome,
+        observationCount: _comicTotalObservations,
+        durationMs: durationMs,
+      );
+    } catch (_) {
+      // Diagnostics must never block scanning or saving a collectible.
     }
   }
 
@@ -156,19 +466,19 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
       setState(() {
         _detectedBarcode = barcode;
         _lookupResult = lookupResult;
-        _lookupPhase = lookupResult.hasCatalogMatch
+        _lookupPhase = lookupResult.hasSuggestedMatch
             ? _LookupPhase.found
             : lookupResult.isNotFound
             ? _LookupPhase.notFound
             : _LookupPhase.failed;
-        _lookupMessage = lookupResult.hasCatalogMatch
+        _lookupMessage = lookupResult.hasSuggestedMatch
             ? null
             : lookupResult.isNotFound
             ? 'No barcode match yet. AI Photo ID works better for loose toys, comics, worn packages, and barcode-less pieces.'
             : 'Barcode lookup is unavailable right now. You can still continue manually or use AI Photo ID.';
       });
 
-      if (lookupResult.hasCatalogMatch) {
+      if (lookupResult.hasSuggestedMatch) {
         CollectorHaptics.medium();
       }
     } on CollectibleIdentificationException catch (error) {
@@ -212,18 +522,18 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
 
       setState(() {
         _lookupResult = lookupResult;
-        _lookupPhase = lookupResult.hasCatalogMatch
+        _lookupPhase = lookupResult.hasSuggestedMatch
             ? _LookupPhase.found
             : lookupResult.isNotFound
             ? _LookupPhase.notFound
             : _LookupPhase.failed;
-        _lookupMessage = lookupResult.hasCatalogMatch
+        _lookupMessage = lookupResult.hasSuggestedMatch
             ? null
             : lookupResult.isNotFound
             ? 'No barcode match yet. AI Photo ID works better for loose toys, comics, worn packages, and barcode-less pieces.'
             : 'Barcode lookup is unavailable right now. You can still continue manually or use AI Photo ID.';
       });
-      if (lookupResult.hasCatalogMatch) {
+      if (lookupResult.hasSuggestedMatch) {
         CollectorHaptics.medium();
       }
     } on CollectibleIdentificationException catch (error) {
@@ -253,6 +563,7 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
   }
 
   Future<void> _resumeScanning() async {
+    _resetComicSupplementState();
     setState(() {
       _detectedBarcode = null;
       _lookupResult = null;
@@ -317,10 +628,16 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
   }
 
   bool _isEligibleForQuickAdd(CollectibleIdentificationResult lookupResult) {
+    final barcodeLength = (lookupResult.barcode ?? '')
+        .replaceAll(RegExp(r'\D'), '')
+        .length;
+    final hasExactComicCode =
+        !lookupResult.isComicLike || barcodeLength == 17 || barcodeLength == 18;
     return _isQuickScanEnabled &&
         lookupResult.source == CollectibleIdentificationSource.barcode &&
         lookupResult.status != CollectibleIdentificationStatus.partial &&
-        lookupResult.hasCatalogMatch;
+        lookupResult.hasCatalogMatch &&
+        hasExactComicCode;
   }
 
   String _resolvedQuickAddCategory(
@@ -451,6 +768,15 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
             : CollectorSnackBarTone.success,
       );
       return true;
+    } on CollectibleLimitException {
+      if (!mounted) return false;
+      CollectorSnackBar.show(
+        context,
+        message:
+            'Your archive limit has been reached. Delete an item or restore Pro before adding another.',
+        tone: CollectorSnackBarTone.warning,
+      );
+      return false;
     } catch (_) {
       if (!mounted) {
         return false;
@@ -672,13 +998,17 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
       children: [
         if (detectedBarcode == null)
           Text(
-            'Scanning for UPC / EAN',
+            _isReadingComicSupplement
+                ? 'Reading the comic issue code'
+                : 'Scanning for UPC / EAN',
             style: Theme.of(context).textTheme.titleMedium,
           )
         else
           Text(
             _lookupPhase == _LookupPhase.loading
                 ? 'Looking up the barcode'
+                : lookupResult?.isPartial == true
+                ? 'Cover needs confirmation'
                 : lookupResult?.hasCatalogMatch == true
                 ? 'Catalog match found'
                 : 'Barcode detected',
@@ -687,22 +1017,37 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
         const SizedBox(height: AppSpacing.sm),
         if (detectedBarcode == null)
           Text(
-            'The first valid barcode will pause the scanner so you can decide what to do next.',
+            _isReadingComicSupplement
+                ? 'Hold steady while Ownzith confirms the five small digits beside the barcode.'
+                : _comicOcrEnabled
+                ? 'Center the full comic barcode, including the five small digits on its right.'
+                : 'The first valid barcode will pause the scanner so you can decide what to do next.',
             style: Theme.of(
               context,
             ).textTheme.bodyMedium?.copyWith(color: AppColors.onSurfaceVariant),
           )
-        else ...[
+        else if (_showSupplementPrompt) ...[
+          _DetectedBarcodeCard(barcode: detectedBarcode),
+          const SizedBox(height: AppSpacing.md),
+          const _LookupNoticeCard(
+            title: 'Issue code not confirmed',
+            description:
+                'The main barcode was readable, but the five-digit comic issue code was not stable enough to trust.',
+            icon: Icons.center_focus_weak_rounded,
+          ),
+        ] else ...[
           _DetectedBarcodeCard(barcode: detectedBarcode),
           if (_lookupPhase == _LookupPhase.loading) ...[
             const SizedBox(height: AppSpacing.md),
             const _LookupLoadingCard(),
-          ] else if (lookupResult?.hasCatalogMatch == true) ...[
+          ] else if (lookupResult?.hasSuggestedMatch == true) ...[
             const SizedBox(height: AppSpacing.md),
             _LookupPreviewCard(result: lookupResult),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              _isQuickScanEnabled
+              lookupResult?.isPartial == true
+                  ? 'This barcode identifies the comic, but the catalog could not verify its cover or variant. Use AI Photo ID or review the details before saving.'
+                  : _isQuickScanEnabled
                   ? 'Quick scan paused here because this match still needs a review before saving.'
                   : 'Review the match, then continue to confirm or refine the details.',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -732,20 +1077,63 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
               variant: CollectorButtonVariant.secondary,
             ),
           )
+        else if (_showSupplementPrompt)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              CollectorButton(
+                label: 'Enter 5 digits',
+                onPressed: _enterComicSupplementManually,
+              ),
+              const SizedBox(height: AppSpacing.md),
+              CollectorButton(
+                label: 'Try again',
+                onPressed: _retryComicSupplementScan,
+                variant: CollectorButtonVariant.secondary,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              CollectorButton(
+                label: 'Continue with series only',
+                onPressed: _continueWithSeriesOnly,
+                variant: CollectorButtonVariant.tertiary,
+              ),
+            ],
+          )
         else
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (lookupResult?.hasCatalogMatch == true) ...[
+              if (lookupResult?.hasSuggestedMatch == true) ...[
+                if (lookupResult?.isPartial == true) ...[
+                  if (!_comicOcrEnabled) ...[
+                    CollectorButton(
+                      label: 'Scan 5-digit issue code',
+                      onPressed: _startComicIssueScan,
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
+                  CollectorButton(
+                    label: 'Verify cover with AI',
+                    onPressed: _openAiPhotoId,
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                ],
                 CollectorButton(
-                  label: 'Review details',
+                  label: lookupResult?.isPartial == true
+                      ? 'Review details manually'
+                      : 'Review details',
                   onPressed: _continueToManualAdd,
+                  variant: lookupResult?.isPartial == true
+                      ? CollectorButtonVariant.secondary
+                      : CollectorButtonVariant.primary,
                 ),
                 const SizedBox(height: AppSpacing.md),
                 CollectorButton(
                   label: 'Scan again',
                   onPressed: _resumeScanning,
-                  variant: CollectorButtonVariant.secondary,
+                  variant: lookupResult?.isPartial == true
+                      ? CollectorButtonVariant.tertiary
+                      : CollectorButtonVariant.secondary,
                 ),
               ] else ...[
                 CollectorButton(
@@ -840,6 +1228,13 @@ class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
                                               controller: _controller,
                                               onDetect: _handleDetect,
                                               height: previewHeight,
+                                              isReadingComicSupplement:
+                                                  _isReadingComicSupplement,
+                                              baseBarcode: _comicBaseBarcode,
+                                              candidate:
+                                                  _comicSupplementCandidate,
+                                              candidateCount:
+                                                  _comicSupplementObservationCount,
                                             ),
                                           )
                                         : Padding(
@@ -946,11 +1341,19 @@ class _ScannerPreviewCard extends StatelessWidget {
     required this.controller,
     required this.onDetect,
     required this.height,
+    required this.isReadingComicSupplement,
+    required this.baseBarcode,
+    required this.candidate,
+    required this.candidateCount,
   });
 
   final MobileScannerController controller;
   final void Function(BarcodeCapture capture) onDetect;
   final double height;
+  final bool isReadingComicSupplement;
+  final String? baseBarcode;
+  final String? candidate;
+  final int candidateCount;
 
   @override
   Widget build(BuildContext context) {
@@ -967,6 +1370,7 @@ class _ScannerPreviewCard extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             MobileScanner(
+              key: ValueKey(controller),
               controller: controller,
               fit: BoxFit.cover,
               onDetect: onDetect,
@@ -983,27 +1387,143 @@ class _ScannerPreviewCard extends StatelessWidget {
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.14),
+                    color: Colors.white.withValues(alpha: 0.2),
                     width: 1.5,
                   ),
                   borderRadius: BorderRadius.circular(28),
                 ),
-                child: Center(
-                  child: Container(
-                    width: 220,
-                    height: 120,
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: AppColors.primary.withValues(alpha: 0.72),
-                        width: 2,
-                      ),
-                      borderRadius: BorderRadius.circular(24),
-                      color: Colors.black.withValues(alpha: 0.08),
+              ),
+            ),
+            IgnorePointer(
+              child: BarcodeOverlay(
+                controller: controller,
+                boxFit: BoxFit.cover,
+                color: AppColors.success,
+                style: PaintingStyle.stroke,
+                showLabel: false,
+              ),
+            ),
+            IgnorePointer(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Container(
+                  margin: const EdgeInsets.only(top: AppSpacing.md),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.xxs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.52),
+                    borderRadius: BorderRadius.circular(99),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.12),
+                    ),
+                  ),
+                  child: Text(
+                    'Scan any barcode in view',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Colors.white.withValues(alpha: 0.86),
                     ),
                   ),
                 ),
               ),
             ),
+            if (isReadingComicSupplement)
+              Positioned(
+                left: AppSpacing.md,
+                right: AppSpacing.md,
+                bottom: AppSpacing.md,
+                child: Semantics(
+                  liveRegion: true,
+                  label: 'Reading the comic issue code. Hold steady.',
+                  child: TweenAnimationBuilder<double>(
+                    key: ValueKey(baseBarcode),
+                    duration: _ScannerFlowScreenState._comicSupplementTimeout,
+                    tween: Tween(begin: 0, end: 1),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, progress, _) => Container(
+                      padding: const EdgeInsets.all(AppSpacing.sm),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.82),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: AppColors.primary.withValues(alpha: 0.75),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primary.withValues(
+                              alpha: 0.12 + (progress * 0.12),
+                            ),
+                            blurRadius: 18,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const SizedBox(
+                                width: 26,
+                                height: 26,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.6,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                              const SizedBox(width: AppSpacing.sm),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Reading comic issue code',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelLarge
+                                          ?.copyWith(color: Colors.white),
+                                    ),
+                                    const SizedBox(height: AppSpacing.xxs),
+                                    Text(
+                                      candidate == null
+                                          ? 'Hold steady while we read the five small digits.'
+                                          : 'Issue $candidate detected · confirming $candidateCount/3',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelMedium
+                                          ?.copyWith(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.78,
+                                            ),
+                                          ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(99),
+                            child: LinearProgressIndicator(
+                              value: progress,
+                              minHeight: 4,
+                              color: AppColors.primary,
+                              backgroundColor: Colors.white.withValues(
+                                alpha: 0.18,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),

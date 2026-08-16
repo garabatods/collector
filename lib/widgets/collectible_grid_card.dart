@@ -5,6 +5,7 @@ import '../core/data/archive_types.dart';
 import '../features/collection/data/models/collectible_detail_navigation_context.dart';
 import '../features/collection/data/models/collectible_model.dart';
 import '../features/collection/data/repositories/collectibles_repository.dart';
+import '../features/gamification/presentation/collector_achievement_notifier.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import 'archive_photo_view.dart';
@@ -76,6 +77,11 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
 
     if (changed == true) {
       await widget.onCollectionChanged();
+      if (mounted) {
+        await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+          context,
+        );
+      }
     }
   }
 
@@ -100,6 +106,9 @@ class _CollectibleGridCardState extends State<CollectibleGridCard> {
         return;
       }
       widget.onCollectibleUpdated?.call(updatedCollectible);
+      await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+        context,
+      );
     } catch (_) {
       if (!mounted) {
         return;
@@ -374,6 +383,11 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
 
     if (changed == true) {
       await widget.onCollectionChanged();
+      if (mounted) {
+        await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+          context,
+        );
+      }
     }
   }
 
@@ -398,6 +412,9 @@ class _CollectibleListCardState extends State<CollectibleListCard> {
         return;
       }
       widget.onCollectibleUpdated?.call(updatedCollectible);
+      await CollectorAchievementNotifier.instance.celebrateAfterUserAction(
+        context,
+      );
     } catch (_) {
       if (!mounted) {
         return;
