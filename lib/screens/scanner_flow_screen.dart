@@ -38,7 +38,7 @@ class ScannerFlowScreen extends StatefulWidget {
 }
 
 class _ScannerFlowScreenState extends State<ScannerFlowScreen> {
-  static const _diagnosticBuildNumber = 9;
+  static const _diagnosticBuildNumber = 10;
   static const _scannerVersion = 'comic-ocr-v2-wide-region';
   static const _comicSupplementTimeout = Duration(milliseconds: 3200);
   static const _scannerFormats = <BarcodeFormat>[
